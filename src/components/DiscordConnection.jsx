@@ -265,25 +265,31 @@ const DiscordConnection = () => {
         try {
           const { data: onboardingData } = await api.get('/onboarding/status');
           if (onboardingData?.currentStep === 'complete') {
-            console.debug('Onboarding complete, navigating to dashboard');
+            console.debug('Onboarding complete, checking current path');
+            // Only navigate if we're not already on the dashboard
+            if (!window.location.pathname.includes('/dashboard')) {
+              console.debug('Navigating to dashboard');
+              navigate('/dashboard', {
+                replace: true,
+                state: {
+                  platform: 'discord',
+                  view: 'discord-entities'
+                }
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error checking onboarding status:', error);
+          // Only navigate on error if we're not already on the dashboard
+          if (!window.location.pathname.includes('/dashboard')) {
             navigate('/dashboard', {
               replace: true,
               state: {
                 platform: 'discord',
-                view: 'discord-entities'
+                error: 'Failed to check onboarding status'
               }
             });
           }
-        } catch (error) {
-          console.error('Error checking onboarding status:', error);
-          // On error, still try to navigate to dashboard
-          navigate('/dashboard', {
-            replace: true,
-            state: {
-              platform: 'discord',
-              error: 'Failed to check onboarding status'
-            }
-          });
         }
       };
       checkOnboarding();

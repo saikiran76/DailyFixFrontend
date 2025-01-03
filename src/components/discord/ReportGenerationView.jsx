@@ -24,8 +24,8 @@ const ReportGenerationView = () => {
     try {
       setLoading(true);
       const [serverResponse, channelsResponse] = await Promise.all([
-        axios.get(`/api/discord/servers/${serverId}`),
-        axios.get(`/api/discord/servers/${serverId}/channels`)
+        axios.get(`/connect/discord/servers/${serverId}`),
+        axios.get(`/connect/discord/servers/${serverId}/channels`)
       ]);
 
       setServer(serverResponse.data);
@@ -46,7 +46,7 @@ const ReportGenerationView = () => {
     try {
       setGenerating(true);
       const response = await axios.post(
-        `/api/discord/servers/${serverId}/channels/${channelId}/report`,
+        `/connect/discord/servers/${serverId}/channels/${channelId}/report`,
         { model: 'gemini' }
       );
 
