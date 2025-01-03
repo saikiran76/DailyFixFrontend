@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
+import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/24/solid';
 import { useSocketConnection } from '../../hooks/useSocketConnection';
 import api, { 
   validateResponse, 
@@ -31,6 +31,8 @@ const MainEntitiesContent = () => {
   const [hasMoreDms, setHasMoreDms] = useState(true);
   const [totalServers, setTotalServers] = useState(0);
   const [totalDms, setTotalDms] = useState(0);
+  const [isDmsExpanded, setIsDmsExpanded] = useState(true);
+  const [isServersExpanded, setIsServersExpanded] = useState(true);
   const retryTimeoutRef = useRef(null);
   const fetchInProgress = useRef(false);
   const rateLimitTimeoutRef = useRef(null);
@@ -397,78 +399,88 @@ const MainEntitiesContent = () => {
     <div className="h-full overflow-auto p-4">
       {/* DMs Section */}
       <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Direct Messages</h2>
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-          {paginatedDms.map(dm => (
-            <div
-              key={dm.id}
-              className="bg-dark-lighter p-4 rounded-lg hover:bg-dark-lightest transition-colors cursor-pointer"
-              onClick={() => navigate(`/discord/dms/${dm.id}`)}
-            >
-              <div className="flex items-center space-x-3">
-                {dm.icon ? (
-                  <img
-                    src={`https://cdn.discordapp.com/avatars/${dm.recipientId}/${dm.icon}.png`}
-                    alt={dm.name}
-                    className="w-12 h-12 rounded-full"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-                    {dm.name.charAt(0)}
+        <div className="flex items-center mb-4 cursor-pointer" onClick={() => setIsDmsExpanded(!isDmsExpanded)}>
+          <ChevronDownIcon className={`h-5 w-5 mr-2 transform transition-transform duration-200 ${isDmsExpanded ? 'rotate-0' : '-rotate-90'}`} />
+          <h2 className="text-xl font-semibold">Direct Messages</h2>
+        </div>
+        <div className={`transition-all duration-300 ease-in-out ${isDmsExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+          <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+            {paginatedDms.map(dm => (
+              <div
+                key={dm.id}
+                className="bg-dark-lighter p-4 rounded-lg hover:bg-dark-lightest transition-colors cursor-pointer"
+                onClick={() => navigate(`/discord/dms/${dm.id}`)}
+              >
+                <div className="flex items-center space-x-3">
+                  {dm.icon ? (
+                    <img
+                      src={`https://cdn.discordapp.com/avatars/${dm.recipientId}/${dm.icon}.png`}
+                      alt={dm.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
+                      {dm.name.charAt(0)}
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="font-semibold text-lg">{dm.name}</h3>
                   </div>
-                )}
-                <div>
-                  <h3 className="font-semibold text-lg">{dm.name}</h3>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          {dms.length > ITEMS_PER_PAGE && (
+            <Pagination
+              currentPage={dmPage}
+              totalPages={totalDmPages}
+              onPageChange={setDmPage}
+            />
+          )}
         </div>
-        {dms.length > ITEMS_PER_PAGE && (
-          <Pagination
-            currentPage={dmPage}
-            totalPages={totalDmPages}
-            onPageChange={setDmPage}
-          />
-        )}
       </div>
 
       {/* Servers Section */}
       <div>
-        <h2 className="text-xl font-semibold mb-4">Servers</h2>
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-          {paginatedServers.map(server => (
-            <div
-              key={server.id}
-              className="bg-dark-lighter p-4 rounded-lg hover:bg-dark-lightest transition-colors cursor-pointer"
-              onClick={() => navigate(`/dashboard/discord/servers/${server.id}`)}
-            >
-              <div className="flex items-center space-x-3">
-                {server.icon ? (
-                  <img
-                    src={`https://cdn.discordapp.com/icons/${server.id}/${server.icon}.png`}
-                    alt={server.name}
-                    className="w-12 h-12 rounded-full"
-                  />
-                ) : (
-                  <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-                    {server.name.charAt(0)}
+        <div className="flex items-center mb-4 cursor-pointer" onClick={() => setIsServersExpanded(!isServersExpanded)}>
+          <ChevronDownIcon className={`h-5 w-5 mr-2 transform transition-transform duration-200 ${isServersExpanded ? 'rotate-0' : '-rotate-90'}`} />
+          <h2 className="text-xl font-semibold">Servers</h2>
+        </div>
+        <div className={`transition-all duration-300 ease-in-out ${isServersExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+          <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+            {paginatedServers.map(server => (
+              <div
+                key={server.id}
+                className="bg-dark-lighter p-4 rounded-lg hover:bg-dark-lightest transition-colors cursor-pointer"
+                onClick={() => navigate(`/dashboard/discord/servers/${server.id}`)}
+              >
+                <div className="flex items-center space-x-3">
+                  {server.icon ? (
+                    <img
+                      src={`https://cdn.discordapp.com/icons/${server.id}/${server.icon}.png`}
+                      alt={server.name}
+                      className="w-12 h-12 rounded-full"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
+                      {server.name.charAt(0)}
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="font-semibold text-lg">{server.name}</h3>
                   </div>
-                )}
-                <div>
-                  <h3 className="font-semibold text-lg">{server.name}</h3>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
+          {servers.length > ITEMS_PER_PAGE && (
+            <Pagination
+              currentPage={serverPage}
+              totalPages={totalServerPages}
+              onPageChange={setServerPage}
+            />
+          )}
         </div>
-        {servers.length > ITEMS_PER_PAGE && (
-          <Pagination
-            currentPage={serverPage}
-            totalPages={totalServerPages}
-            onPageChange={setServerPage}
-          />
-        )}
       </div>
     </div>
   );
