@@ -1,5 +1,5 @@
-import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Toaster } from 'react-hot-toast';
 import Login from './pages/Login';
@@ -16,26 +16,56 @@ import ReportGenerationView from './components/discord/ReportGenerationView';
 import './App.css';
 
 const ProtectedRoute = ({ children }) => {
-  const { session, loading } = useAuth();
+  const { session, onboardingStatus } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-dark flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!session) {
+      navigate('/login', { replace: true });
+      return;
+    }
 
-  if (!session) {
-    return <Navigate to="/login" />;
-  }
+    // Check if user needs to complete onboarding
+    if (!onboardingStatus?.isComplete) {
+      // If not in onboarding flow, redirect to current step
+      if (!location.pathname.includes('/onboarding')) {
+        const currentStep = onboardingStatus?.currentStep || 'welcome';
+        navigate(`/onboarding/${currentStep}`, { replace: true });
+        return;
+      }
+      
+      // If in Matrix setup but Matrix is not connected
+      if (location.pathname.includes('matrix_setup') && !onboardingStatus.matrixConnected) {
+        return; // Allow access to Matrix setup
+      }
+      
+      // If Matrix is not connected and trying to access other onboarding steps
+      if (!onboardingStatus.matrixConnected && 
+          !location.pathname.includes('welcome') && 
+          !location.pathname.includes('protocol_selection') &&
+          !location.pathname.includes('matrix_setup')) {
+        navigate('/onboarding/matrix_setup', { replace: true });
+        return;
+      }
+    }
 
+    // If user is trying to access onboarding pages but has completed onboarding
+    if (onboardingStatus?.isComplete && location.pathname.includes('/onboarding')) {
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+  }, [session, onboardingStatus, location.pathname, navigate]);
+
+  if (!session) return null;
   return children;
 };
 
 const AppRoutes = () => {
   const { session, loading, onboardingStatus } = useAuth();
+  const location = useLocation();
 
+  // Show loading spinner while initializing
   if (loading) {
     return (
       <div className="min-h-screen bg-dark flex items-center justify-center">
@@ -44,7 +74,7 @@ const AppRoutes = () => {
     );
   }
 
-  // If not logged in, only show login route
+  // If not logged in, only show login route and OAuth callback
   if (!session) {
     return (
       <Routes>
@@ -55,14 +85,24 @@ const AppRoutes = () => {
     );
   }
 
-  // If logged in but onboarding not complete, redirect to onboarding
-  if (!onboardingStatus.isComplete && 
-      !window.location.pathname.startsWith('/onboarding') && 
-      !window.location.pathname.startsWith('/oauth/discord/callback')) {
-    return <Navigate to="/onboarding" replace />;
+  // If logged in but onboarding not complete, ensure proper routing
+  if (!onboardingStatus?.isComplete) {
+    // Allow OAuth callback and onboarding routes
+    if (location.pathname.startsWith('/oauth/discord/callback') ||
+        location.pathname.startsWith('/onboarding')) {
+      return (
+        <Routes>
+          <Route path="/oauth/discord/callback" element={<DiscordCallback />} />
+          <Route path="/onboarding/*" element={<Onboarding />} />
+          <Route path="*" element={<Navigate to={`/onboarding/${onboardingStatus?.currentStep || 'welcome'}`} replace />} />
+        </Routes>
+      );
+    }
+    // Redirect to current onboarding step
+    return <Navigate to={`/onboarding/${onboardingStatus?.currentStep || 'welcome'}`} replace />;
   }
 
-  // Main app routes for authenticated users
+  // Main app routes for authenticated and onboarded users
   return (
     <Routes>
       <Route path="/oauth/discord/callback" element={<DiscordCallback />} />

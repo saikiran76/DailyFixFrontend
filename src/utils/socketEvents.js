@@ -64,8 +64,11 @@ export const validateEventData = (eventName, data) => {
 };
 
 // Socket connection options
-export const getConnectionOptions = (token, platform) => ({
-  auth: { token },
+export const getConnectionOptions = (token, platform, userId) => ({
+  auth: { 
+    token,
+    userId
+  },
   query: { platform },
   transports: ['websocket'],
   reconnection: true,

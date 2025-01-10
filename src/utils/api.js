@@ -198,4 +198,32 @@ api.interceptors.response.use(
   }
 );
 
+api.getAccessToken = async function() {
+  try {
+    // First try to get the current session directly from Supabase
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token && session?.user?.id) {
+      return {
+        token: session.access_token,
+        userId: session.user.id
+      };
+    }
+
+    // If no session, try to refresh it
+    const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
+    if (refreshedSession?.access_token && refreshedSession?.user?.id) {
+      return {
+        token: refreshedSession.access_token,
+        userId: refreshedSession.user.id
+      };
+    }
+
+    console.error('No valid session found');
+    return null;
+  } catch (error) {
+    console.error('Error getting access token:', error);
+    return null;
+  }
+};
+
 export default api; 

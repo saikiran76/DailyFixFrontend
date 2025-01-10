@@ -4,7 +4,6 @@ import { useAuth } from '../contexts/AuthContext';
 import api from '../utils/axios';
 import { initializeSocket, disconnectSocket } from '../utils/socket';
 import { toast } from 'react-hot-toast';
-import { QRCodeSVG } from 'qrcode.react';
 import { usePlatformConnection } from '../hooks/usePlatformConnection';
 
 const WhatsAppConnection = ({ onSuccess }) => {
@@ -12,7 +11,7 @@ const WhatsAppConnection = ({ onSuccess }) => {
     connect,
     connectionStatus,
     error,
-    qrCode,
+    bridgeRoomId,
     isConnecting
   } = usePlatformConnection('whatsapp', { onSuccess });
 
@@ -24,6 +23,28 @@ const WhatsAppConnection = ({ onSuccess }) => {
   const handleRetry = () => {
     connect();
   };
+
+  const renderElementInstructions = () => (
+    <div className="w-full max-w-md p-6 bg-white border rounded-lg shadow-sm space-y-4">
+      <h3 className="text-lg font-semibold text-gray-800">Scan QR Code in Element</h3>
+      <div className="space-y-3">
+        <p className="text-gray-600">
+          Please follow these steps to connect WhatsApp:
+        </p>
+        <ol className="list-decimal list-inside space-y-2 text-gray-600">
+          <li>Open Element client</li>
+          <li>Go to room: <span className="font-mono bg-gray-100 px-1 rounded">{bridgeRoomId || 'WhatsApp Bridge'}</span></li>
+          <li>Find the QR code image in the room</li>
+          <li>Open WhatsApp on your phone</li>
+          <li>Tap Menu (three dots) → WhatsApp Web</li>
+          <li>Point your phone to scan the QR code</li>
+        </ol>
+        <p className="text-sm text-gray-500 mt-4">
+          Once scanned, the connection will be established automatically.
+        </p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col items-center justify-center p-6 space-y-4">
@@ -42,24 +63,13 @@ const WhatsAppConnection = ({ onSuccess }) => {
         </div>
       )}
 
-      {connectionStatus === 'pending' && qrCode && (
-        <div className="w-full max-w-md p-6 bg-white border rounded-lg shadow-sm space-y-4">
-          <p className="text-gray-600 text-sm text-center">
-            Please scan this QR code with your WhatsApp mobile app
-          </p>
-          <div className="flex justify-center">
-            <QRCodeSVG value={qrCode} size={256} className="mx-auto" />
-          </div>
-          <p className="text-xs text-gray-500 text-center">
-            Open WhatsApp on your phone {'->'} Menu {'->'} WhatsApp Web {'->'} Scan QR code
-          </p>
-        </div>
-      )}
+      {connectionStatus === 'pending' && renderElementInstructions()}
 
       {connectionStatus === 'connecting' && (
         <div className="flex flex-col items-center space-y-2">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
           <p className="text-gray-600">Connecting to WhatsApp...</p>
+          <p className="text-sm text-gray-500">Please wait while we establish the connection</p>
         </div>
       )}
 

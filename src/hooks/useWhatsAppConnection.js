@@ -1,11 +1,10 @@
-import React, { useState, useCallback } from 'react';
-import { initializeSocket, handleStatusUpdate, handleSocketError, handleSocketDisconnect } from '../services/directServices/whatsappDirect';
+import { useState, useCallback } from 'react';
+import { socket } from '../utils/socket';
 import { api } from '../services/api';
 
 export const useWhatsAppConnection = () => {
   const [state, setState] = useState({
     status: 'initializing',
-    qrCode: null,
     error: null,
     retryCount: 0,
     isSocketConnected: false
@@ -16,25 +15,16 @@ export const useWhatsAppConnection = () => {
       setState(prev => ({ 
         ...prev, 
         status: 'initializing',
-        error: null,
-        qrCode: null 
+        error: null
       }));
 
-      const socket = await initializeSocket();
-      
-      if (!socket) {
-        throw new Error('Failed to initialize socket connection');
+      // Initialize socket connection
+      if (!socket.connected) {
+        await socket.connect();
       }
 
-      const setupSocketListeners = (socket) => {
-        socket.on('whatsapp_status', handleStatusUpdate);
-        socket.on('connect_error', handleSocketError);
-        socket.on('disconnect', handleSocketDisconnect);
-      };
-
-      setupSocketListeners(socket);
-
-      const response = await api.post('/connect/whatsapp/initiate');
+      // Request WhatsApp connection through Matrix bridge
+      const response = await api.post('/matrix/whatsapp/connect');
       
       if (response.data.status === 'error') {
         throw new Error(response.data.message);

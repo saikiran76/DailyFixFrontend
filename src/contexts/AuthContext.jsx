@@ -9,6 +9,17 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+// Onboarding steps configuration
+const ONBOARDING_STEPS = {
+  WELCOME: 'welcome',
+  PROTOCOL_SELECTION: 'protocol_selection',
+  MATRIX_SETUP: 'matrix_setup',
+  WHATSAPP_SETUP: 'whatsapp_setup',
+  PLATFORM_SELECTION: 'platform_selection',
+  PLATFORM_CONNECTION: 'platform_connection',
+  COMPLETION: 'completion'
+};
+
 const AuthContext = createContext({});
 
 export const useAuth = () => {
@@ -24,75 +35,140 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [onboardingStatus, setOnboardingStatus] = useState({
     isComplete: false,
-    currentStep: 'welcome',
+    currentStep: ONBOARDING_STEPS.WELCOME,
     matrixConnected: false,
     connectedPlatforms: []
   });
 
   const checkOnboardingStatus = useCallback(async (currentSession) => {
     try {
-      const { data } = await api.get('/user/onboarding-status', {
-        headers: { Authorization: `Bearer ${currentSession.access_token}` }
-      });
+      const { data: onboarding } = await supabase
+        .from('user_onboarding')
+        .select('current_step, is_complete')
+        .eq('user_id', currentSession.user.id)
+        .single();
+
+      // Check Matrix connection status
+      const { data: matrixAccount } = await supabase
+        .from('accounts')
+        .select('*')
+        .eq('user_id', currentSession.user.id)
+        .eq('platform', 'matrix')
+        .single();
       
       setOnboardingStatus({
-        isComplete: data.isComplete,
-        currentStep: data.currentStep,
-        matrixConnected: data.matrixConnected,
-        connectedPlatforms: data.connectedPlatforms || []
+        isComplete: onboarding?.is_complete || false,
+        currentStep: onboarding?.current_step || ONBOARDING_STEPS.WELCOME,
+        matrixConnected: !!matrixAccount,
+        connectedPlatforms: []
       });
     } catch (error) {
-      handleError(error, { context: 'checkOnboardingStatus' });
+      console.error('Error checking onboarding status:', error);
+      setOnboardingStatus({
+        isComplete: false,
+        currentStep: ONBOARDING_STEPS.WELCOME,
+        matrixConnected: false,
+        connectedPlatforms: []
+      });
     }
   }, []);
 
   useEffect(() => {
-    let mounted = true;
-
-    const initializeAuth = async () => {
+    const checkSession = async () => {
       try {
-        // Get initial session
-        const { data: { session: initialSession } } = await supabase.auth.getSession();
-        
-        if (mounted) {
-          setSession(initialSession);
-          if (initialSession) {
-            await checkOnboardingStatus(initialSession);
+        setLoading(true);
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+
+        if (session) {
+          // Check onboarding status
+          const { data: onboarding } = await supabase
+            .from('user_onboarding')
+            .select('current_step, is_complete')
+            .eq('user_id', session.user.id)
+            .single();
+
+          if (!onboarding) {
+            // Create initial onboarding record
+            await supabase.from('user_onboarding').insert({
+              user_id: session.user.id,
+              current_step: ONBOARDING_STEPS.WELCOME,
+              is_complete: false
+            });
+            setOnboardingStatus({ 
+              currentStep: ONBOARDING_STEPS.WELCOME, 
+              isComplete: false,
+              matrixConnected: false,
+              connectedPlatforms: []
+            });
+          } else {
+            setOnboardingStatus({
+              currentStep: onboarding.current_step,
+              isComplete: onboarding.is_complete,
+              matrixConnected: false,
+              connectedPlatforms: []
+            });
           }
-          setLoading(false);
         }
-
-        // Listen for auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-          if (mounted) {
-            setSession(newSession);
-            if (newSession) {
-              await checkOnboardingStatus(newSession);
-            } else {
-              setOnboardingStatus({
-                isComplete: false,
-                currentStep: 'welcome',
-                matrixConnected: false,
-                connectedPlatforms: []
-              });
-            }
-          }
-        });
-
-        return () => {
-          mounted = false;
-          subscription?.unsubscribe();
-        };
       } catch (error) {
-        console.error('Error initializing auth:', error);
-        if (mounted) {
-          setLoading(false);
-        }
+        console.error('Session check error:', error);
+        setSession(null);
+        setOnboardingStatus({
+          isComplete: false,
+          currentStep: ONBOARDING_STEPS.WELCOME,
+          matrixConnected: false,
+          connectedPlatforms: []
+        });
+      } finally {
+        setLoading(false);
       }
     };
 
-    initializeAuth();
-  }, [checkOnboardingStatus]);
+    checkSession();
+
+    // Set up auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, session);
+      setSession(session);
+
+      if (session) {
+        try {
+          const { data: onboarding } = await supabase
+            .from('user_onboarding')
+            .select('current_step, is_complete')
+            .eq('user_id', session.user.id)
+            .single();
+
+          if (!onboarding) {
+            await supabase.from('user_onboarding').insert({
+              user_id: session.user.id,
+              current_step: ONBOARDING_STEPS.WELCOME,
+              is_complete: false
+            });
+            setOnboardingStatus({
+              currentStep: ONBOARDING_STEPS.WELCOME,
+              isComplete: false,
+              matrixConnected: false,
+              connectedPlatforms: []
+            });
+          } else {
+            setOnboardingStatus({
+              currentStep: onboarding.current_step,
+              isComplete: onboarding.is_complete,
+              matrixConnected: false,
+              connectedPlatforms: []
+            });
+          }
+        } catch (error) {
+          console.error('Error checking onboarding status:', error);
+        }
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const signIn = async (email, password) => {
     try {
@@ -102,8 +178,52 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (error) throw new AppError(ErrorTypes.AUTH, error.message);
+      
+      // Set session after successful login
+      setSession(data.session);
+
+      // Check onboarding status for the new session
+      if (data.session) {
+        const { data: onboarding } = await supabase
+          .from('user_onboarding')
+          .select('current_step, is_complete')
+          .eq('user_id', data.session.user.id)
+          .single();
+
+        // Check Matrix connection status
+        const { data: matrixAccount } = await supabase
+          .from('accounts')
+          .select('*')
+          .eq('user_id', data.session.user.id)
+          .eq('platform', 'matrix')
+          .single();
+
+        if (!onboarding) {
+          // Create initial onboarding record
+          await supabase.from('user_onboarding').insert({
+            user_id: data.session.user.id,
+            current_step: ONBOARDING_STEPS.WELCOME,
+            is_complete: false
+          });
+          setOnboardingStatus({
+            currentStep: ONBOARDING_STEPS.WELCOME,
+            isComplete: false,
+            matrixConnected: false,
+            connectedPlatforms: []
+          });
+        } else {
+          setOnboardingStatus({
+            currentStep: onboarding.current_step,
+            isComplete: onboarding.is_complete,
+            matrixConnected: !!matrixAccount,
+            connectedPlatforms: matrixAccount ? ['matrix'] : []
+          });
+        }
+      }
+
       return data;
     } catch (error) {
+      console.error('Sign in error:', error);
       throw new AppError(ErrorTypes.AUTH, error.message);
     }
   };

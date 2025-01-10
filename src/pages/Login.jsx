@@ -4,58 +4,50 @@ import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'react-hot-toast';
 
 const Login = () => {
-  const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  
-  const auth = useAuth();
-  console.log('Auth context in Login:', auth); // Debug log
-  
-  const { signIn, signUp, session, onboardingStatus } = auth;
+  const { signIn, signUp, session, onboardingStatus } = useAuth();
+  const navigate = useNavigate();
 
   useEffect(() => {
-    console.log('Session changed:', session); // Debug log
-    console.log('Onboarding status:', onboardingStatus); // Debug log
-    
+    // If user is already authenticated, redirect appropriately
     if (session) {
-      if (!onboardingStatus.isComplete) {
-        navigate('/onboarding');
+      if (!onboardingStatus?.isComplete) {
+        const currentStep = onboardingStatus?.currentStep || 'welcome';
+        navigate(`/onboarding/${currentStep}`, { replace: true });
       } else {
-        navigate('/dashboard');
+        navigate('/dashboard', { replace: true });
       }
     }
   }, [session, onboardingStatus, navigate]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
-    if (isLoading) return;
-    
-    setIsLoading(true);
+    setError('');
+    setLoading(true);
+
     try {
-      console.log('Starting auth process...', { isSignUp }); // Debug log
-      
-      if (isSignUp) {
-        console.log('Attempting signup...'); // Debug log
-        const { user } = await signUp(email, password);
-        console.log('Signup result:', user); // Debug log
-        
-        if (user?.identities?.length === 0) {
-          toast.success('Please check your email to verify your account');
-          setIsSignUp(false);
-        }
-      } else {
-        console.log('Attempting signin...'); // Debug log
-        await signIn(email, password);
-        console.log('Signin successful'); // Debug log
-        // Navigation is handled by the useEffect above
+      console.log('Starting auth process...', { isSignUp });
+      const { session } = isSignUp 
+        ? await signUp(email, password)
+        : await signIn(email, password);
+
+      console.log(`${isSignUp ? 'Signup' : 'Signin'} successful`);
+
+      if (isSignUp && !session) {
+        toast.success('Please check your email to verify your account');
+        setIsSignUp(false);
       }
+      // Navigation will be handled by the useEffect above when session is updated
     } catch (error) {
-      console.error('Authentication error:', error);
-      toast.error(error.message || 'Authentication failed');
+      console.error('Auth error:', error);
+      setError(error.message);
+      toast.error(error.message);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
@@ -79,7 +71,7 @@ const Login = () => {
               className="w-full p-3 rounded bg-dark border border-gray-700 text-white"
               placeholder="Enter your email"
               required
-              disabled={isLoading}
+              disabled={loading}
             />
           </div>
 
@@ -95,16 +87,22 @@ const Login = () => {
               className="w-full p-3 rounded bg-dark border border-gray-700 text-white"
               placeholder="Enter your password"
               required
-              disabled={isLoading}
+              disabled={loading}
             />
           </div>
 
+          {error && (
+            <div className="text-red-500 text-sm">
+              {error}
+            </div>
+          )}
+
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={loading}
             className="w-full p-3 bg-primary text-white rounded hover:bg-primary/80 transition-colors disabled:opacity-50 flex items-center justify-center"
           >
-            {isLoading ? (
+            {loading ? (
               <>
                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -121,7 +119,7 @@ const Login = () => {
         <button
           onClick={() => setIsSignUp(!isSignUp)}
           className="w-full text-center text-gray-400 hover:text-white"
-          disabled={isLoading}
+          disabled={loading}
         >
           {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
         </button>

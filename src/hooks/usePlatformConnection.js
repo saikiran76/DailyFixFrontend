@@ -10,6 +10,7 @@ export const usePlatformConnection = (platform) => {
     status: 'initializing',
     error: null,
     qrCode: null,
+    bridgeRoomId: null,
     botToken: '',
     retryCount: 0,
     connectionType: PLATFORM_CONFIGS[platform].connectionType,
@@ -25,17 +26,27 @@ export const usePlatformConnection = (platform) => {
         setState(prev => ({
           ...prev,
           status: 'pending',
-          qrCode: data.qrCode,
+          bridgeRoomId: data.bridgeRoomId,
           error: null,
           isConnecting: false
         }));
+        break;
+      case 'awaiting_scan':
+        setState(prev => ({
+          ...prev,
+          status: 'pending',
+          bridgeRoomId: data.bridgeRoomId,
+          error: null,
+          isConnecting: false
+        }));
+        toast.success('QR code is ready in Element. Please scan it with your WhatsApp.');
         break;
       case 'connected':
         setState(prev => ({
           ...prev,
           status: 'connected',
           error: null,
-          qrCode: null,
+          bridgeRoomId: data.bridgeRoomId,
           isConnecting: false
         }));
         toast.success(`${platform} connected successfully!`);
@@ -45,7 +56,7 @@ export const usePlatformConnection = (platform) => {
           ...prev,
           status: 'error',
           error: data.error,
-          qrCode: null,
+          bridgeRoomId: null,
           isConnecting: false
         }));
         toast.error(data.error || 'Connection error occurred');
