@@ -37,8 +37,12 @@ const WhatsAppContactList = () => {
         return;
       }
 
+      // Handle nested data structure
+      const contactsData = response.data.data?.data?.contacts || [];
+      console.log('Parsed contacts:', contactsData);
+      
       // Ensure we're setting an array
-      setContacts(Array.isArray(response.data.data) ? response.data.data : []);
+      setContacts(Array.isArray(contactsData) ? contactsData : []);
       setError(null);
     } catch (error) {
       console.error('Error fetching contacts:', error);
