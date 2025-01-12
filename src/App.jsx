@@ -14,6 +14,8 @@ import MainEntitiesView from './components/discord/MainEntitiesView';
 import ServerDetailsView from './components/discord/ServerDetailsView';
 import ReportGenerationView from './components/discord/ReportGenerationView';
 import './App.css';
+import io from 'socket.io-client';
+import api from './utils/api';
 
 const ProtectedRoute = ({ children }) => {
   const { session, onboardingStatus } = useAuth();
@@ -21,41 +23,78 @@ const ProtectedRoute = ({ children }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!session) {
-      navigate('/login', { replace: true });
-      return;
-    }
-
-    // Check if user needs to complete onboarding
-    if (!onboardingStatus?.isComplete) {
-      // If not in onboarding flow, redirect to current step
-      if (!location.pathname.includes('/onboarding')) {
-        const currentStep = onboardingStatus?.currentStep || 'welcome';
-        navigate(`/onboarding/${currentStep}`, { replace: true });
+    const handleNavigation = async () => {
+      if (!session) {
+        console.log('No session, redirecting to login');
+        navigate('/login', { replace: true });
         return;
       }
-      
-      // If in Matrix setup but Matrix is not connected
-      if (location.pathname.includes('matrix_setup') && !onboardingStatus.matrixConnected) {
-        return; // Allow access to Matrix setup
-      }
-      
-      // If Matrix is not connected and trying to access other onboarding steps
-      if (!onboardingStatus.matrixConnected && 
-          !location.pathname.includes('welcome') && 
-          !location.pathname.includes('protocol_selection') &&
-          !location.pathname.includes('matrix_setup')) {
-        navigate('/onboarding/matrix_setup', { replace: true });
+
+      // If we're already on the dashboard, don't do any redirects
+      if (location.pathname === '/dashboard') {
         return;
       }
-    }
 
-    // If user is trying to access onboarding pages but has completed onboarding
-    if (onboardingStatus?.isComplete && location.pathname.includes('/onboarding')) {
-      navigate('/dashboard', { replace: true });
-      return;
-    }
-  }, [session, onboardingStatus, location.pathname, navigate]);
+      try {
+        // Check if WhatsApp is already connected
+        const response = await api.get('/matrix/whatsapp/status');
+        const isWhatsAppConnected = response.data?.status === 'connected';
+
+        // If WhatsApp is connected or onboarding is complete -> dashboard
+        if (isWhatsAppConnected || onboardingStatus?.isComplete) {
+          console.log('WhatsApp connected/Onboarding complete, navigating to dashboard');
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
+        // Handle incomplete onboarding
+        if (!onboardingStatus?.isComplete) {
+          const currentStep = onboardingStatus?.currentStep || 'welcome';
+          
+          // If we're already in the correct onboarding step, don't redirect
+          if (location.pathname === `/onboarding/${currentStep}`) {
+            return;
+          }
+
+          // If Matrix not connected, only allow initial steps
+          const isInitialStep = ['/welcome', '/protocol_selection', '/matrix_setup']
+            .some(step => location.pathname.includes(step));
+          
+          if (!onboardingStatus.matrixConnected && !isInitialStep) {
+            console.log('Matrix not connected, redirecting to setup');
+            navigate('/onboarding/matrix_setup', { replace: true });
+            return;
+          }
+
+          // If not in onboarding flow, redirect to current step
+          if (!location.pathname.includes('/onboarding')) {
+            console.log('Redirecting to current onboarding step:', currentStep);
+            navigate(`/onboarding/${currentStep}`, { replace: true });
+          }
+        }
+      } catch (error) {
+        console.error('Error checking WhatsApp status:', error);
+      }
+    };
+
+    handleNavigation();
+  }, [session, onboardingStatus, location.pathname]);
+
+  // Listen for WhatsApp connection status
+  useEffect(() => {
+    const socket = io(process.env.REACT_APP_API_URL || 'http://localhost:3001');
+
+    socket.on('whatsapp_status', (data) => {
+      if (data.status === 'connected') {
+        console.log('WhatsApp connected via socket, navigating to dashboard');
+        navigate('/dashboard', { replace: true });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [navigate]);
 
   if (!session) return null;
   return children;

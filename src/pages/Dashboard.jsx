@@ -1,15 +1,73 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import WhatsAppInvites from '../components/WhatsAppInvites';
+import Sidebar from '../components/Sidebar';
+import WhatsAppContactList from '../components/WhatsAppContactList';
+import TopNavPanel from '../components/TopNavPanel';
+import ChatView from '../components/ChatView';
+import api from '../utils/api';
 
 const Dashboard = () => {
+  const [selectedPlatform, setSelectedPlatform] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+
+  useEffect(() => {
+    // Initialize with WhatsApp account if connected
+    const initializeAccounts = async () => {
+      try {
+        const response = await api.get('/matrix/whatsapp/status');
+        if (response.data.status === 'connected') {
+          setAccounts([
+            {
+              id: 'whatsapp',
+              platform: 'whatsapp',
+              name: 'WhatsApp'
+            }
+          ]);
+        }
+      } catch (error) {
+        console.error('Error fetching WhatsApp status:', error);
+      }
+    };
+
+    initializeAccounts();
+  }, []);
+
+  const handlePlatformSelect = (platform) => {
+    setSelectedPlatform(platform);
+  };
+
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold mb-8">Dashboard</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div>
-          <WhatsAppInvites />
+    <div className="flex h-screen bg-dark">
+      {/* Sidebar */}
+      <div className="w-64 bg-dark-darker border-r border-dark-lighter">
+        <Sidebar 
+          accounts={accounts}
+          selectedPlatform={selectedPlatform}
+          onPlatformSelect={handlePlatformSelect}
+        />
+      </div>
+
+      {/* Contact List Panel */}
+      <div className="w-80 bg-dark-darker border-r border-dark-lighter">
+        <div className="h-full flex flex-col">
+          <div className="p-4 border-b border-dark-lighter">
+            <h2 className="text-lg font-semibold text-white">Contacts</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <WhatsAppContactList />
+          </div>
         </div>
-        {/* Add other dashboard components here */}
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col bg-dark">
+        {/* Top Navigation Panel */}
+        <TopNavPanel />
+
+        {/* Chat View */}
+        <div className="flex-1 p-4 overflow-hidden">
+          <ChatView />
+        </div>
       </div>
     </div>
   );

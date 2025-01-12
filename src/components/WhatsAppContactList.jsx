@@ -1,134 +1,151 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import api from '../utils/api';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useAuth } from '../contexts/AuthContext';
 
+
+const ShimmerContactList = () => (
+  <div className="space-y-4 p-4">
+    {[1, 2, 3, 4, 5].map((i) => (
+      <div key={i} className="flex items-center space-x-4">
+        <div className="w-10 h-10 bg-gray-200 rounded-full animate-pulse" />
+        <div className="flex-1 space-y-2">
+          <div className="h-4 bg-gray-200 rounded w-3/4 animate-pulse" />
+          <div className="h-3 bg-gray-200 rounded w-1/2 animate-pulse" />
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 const WhatsAppContactList = () => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [syncInProgress, setSyncInProgress] = useState(false);
   const { session } = useAuth();
-  const { socket, isConnected } = useSocketConnection('whatsapp', {
-    auth: {
-      token: session?.access_token,
-      userId: session?.user?.id
-    },
-    autoConnect: true,
-    reconnection: true,
-    reconnectionAttempts: 5,
-    reconnectionDelay: 2000
-  });
-
-  useEffect(() => {
-    // Only fetch contacts if we have a valid socket connection
-    if (socket && isConnected) {
-      fetchContacts();
-    }
-  }, [socket, isConnected]);
-
-  const handleContactUpdate = useCallback((data) => {
-    if (data.type === 'update' || data.type === 'new') {
-      fetchContacts(); // Refresh the entire list for now
-    }
-  }, []);
-
-  const handleSyncStatusUpdate = useCallback((data) => {
-    setContacts(prevContacts => 
-      prevContacts.map(contact => 
-        contact.id === data.contactId
-          ? { ...contact, sync_status: data.status }
-          : contact
-      )
-    );
-    
-    if (data.status === 'approved') {
-      toast.success('Room created! Check your Matrix client for the invite.');
-    }
-  }, []);
-
-  const handleUnreadUpdate = useCallback((data) => {
-    setContacts(prevContacts => 
-      prevContacts.map(contact => 
-        contact.id === data.contactId
-          ? { ...contact, unread_count: data.unreadCount }
-          : contact
-      )
-    );
-  }, []);
-
-  useEffect(() => {
-    if (socket) {
-      socket.on('whatsapp_contact_update', handleContactUpdate);
-      socket.on('whatsapp_sync_status', handleSyncStatusUpdate);
-      socket.on('whatsapp_unread_update', handleUnreadUpdate);
-      
-      return () => {
-        socket.off('whatsapp_contact_update', handleContactUpdate);
-        socket.off('whatsapp_sync_status', handleSyncStatusUpdate);
-        socket.off('whatsapp_unread_update', handleUnreadUpdate);
-      };
-    }
-  }, [socket, handleContactUpdate, handleSyncStatusUpdate, handleUnreadUpdate]);
+  const { socket, isConnected } = useSocketConnection('whatsapp');
 
   const fetchContacts = async () => {
     try {
-      setLoading(true);
       const response = await api.get('/api/whatsapp-entities/contacts');
-      setContacts(response.data.data);
+      console.log('Fetched contacts:', response.data);
+
+      if (response.data.status === 'error') {
+        setError(response.data.message);
+        setContacts([]);
+        return;
+      }
+
+      // Ensure we're setting an array
+      setContacts(Array.isArray(response.data.data) ? response.data.data : []);
+      setError(null);
     } catch (error) {
-      setError(error.response?.data?.message || 'Failed to fetch contacts');
+      console.error('Error fetching contacts:', error);
       toast.error('Failed to fetch WhatsApp contacts');
+      setContacts([]);
+      setError('Failed to fetch contacts');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSyncRequest = async (contactId) => {
-    try {
-      setSyncInProgress(true);
-      await api.post(`/api/whatsapp-entities/contacts/${contactId}/sync`);
-      toast.success('Sync request sent. Please wait for room invite in your Matrix client.');
-      fetchContacts(); // Refresh list to update status
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to request sync');
-    } finally {
-      setSyncInProgress(false);
+  useEffect(() => {
+    if (session) {
+      fetchContacts();
     }
-  };
+  }, [session]);
 
-  const handleSyncApproval = async (contactId, status) => {
-    try {
-      setSyncInProgress(true);
-      await api.put(`/api/whatsapp-entities/contacts/${contactId}/sync`, { status });
-      toast.success(`Sync ${status === 'approved' ? 'approved' : 'rejected'}`);
-      if (status === 'approved') {
-        toast.info('Please check your Matrix client for the room invite');
-      }
-      fetchContacts(); // Refresh list to update status
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to update sync status');
-    } finally {
-      setSyncInProgress(false);
+  useEffect(() => {
+    if (socket && isConnected) {
+      console.log('Socket connected, setting up listeners');
+
+      // Listen for new contacts
+      socket.on('whatsapp:contact_added', (newContact) => {
+        console.log('New contact added:', newContact);
+        setContacts(prevContacts => {
+          const contacts = Array.isArray(prevContacts) ? prevContacts : [];
+          const exists = contacts.some(c => c.whatsapp_id === newContact.whatsapp_id);
+          if (!exists) {
+            toast.success(`New contact added: ${newContact.display_name}`);
+            return [...contacts, newContact];
+          }
+          return contacts;
+        });
+      });
+
+      // Listen for messages
+      socket.on('whatsapp:message', (message) => {
+        console.log('New message received:', message);
+        setContacts(prevContacts => {
+          if (!Array.isArray(prevContacts)) return [];
+          return prevContacts.map(contact => {
+            if (contact.whatsapp_id === message.contactId) {
+              const newUnreadCount = (contact.unread_count || 0) + 1;
+              console.log(`Updating contact ${contact.display_name} with unread count: ${newUnreadCount}`);
+              return {
+                ...contact,
+                last_message: message.content,
+                last_message_at: message.timestamp,
+                unread_count: newUnreadCount
+              };
+            }
+            return contact;
+          });
+        });
+      });
+
+      // Listen for read status updates
+      socket.on('whatsapp:read_status', ({ contactId }) => {
+        console.log('Read status update for contact:', contactId);
+        setContacts(prevContacts => {
+          if (!Array.isArray(prevContacts)) return [];
+          return prevContacts.map(contact => {
+            if (contact.whatsapp_id === contactId) {
+              return {
+                ...contact,
+                unread_count: 0
+              };
+            }
+            return contact;
+          });
+        });
+      });
+
+      // Add sync status listener
+      socket.on('whatsapp:sync_started', () => {
+        console.log('WhatsApp contact sync started');
+        setLoading(true);
+        toast.info('Syncing WhatsApp contacts...', {
+          duration: 3000
+        });
+      });
+
+      // Refresh contacts periodically while connected
+      const refreshInterval = setInterval(fetchContacts, 30000);
+
+      return () => {
+        console.log('Cleaning up socket listeners');
+        socket.off('whatsapp:contact_added');
+        socket.off('whatsapp:message');
+        socket.off('whatsapp:read_status');
+        socket.off('whatsapp:sync_started');
+        clearInterval(refreshInterval);
+      };
     }
-  };
+  }, [socket, isConnected]);
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center p-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-      </div>
-    );
+    return <ShimmerContactList />;
   }
 
   if (error) {
     return (
-      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-        <p className="text-red-600">{error}</p>
-        <button
+      <div className="p-4 text-center">
+        <p className="text-red-500 mb-2">{error}</p>
+        <button 
           onClick={fetchContacts}
-          className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          className="text-primary hover:text-primary-dark transition-colors"
         >
           Retry
         </button>
@@ -136,113 +153,49 @@ const WhatsAppContactList = () => {
     );
   }
 
+  // Ensure contacts is always an array before mapping
+  const contactsList = Array.isArray(contacts) ? contacts : [];
+
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-semibold">WhatsApp Contacts</h2>
-          <button
-            onClick={fetchContacts}
-            disabled={syncInProgress}
-            className="p-2 text-gray-600 hover:text-gray-900 disabled:opacity-50"
-            title="Refresh contacts"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
+    <div className="divide-y divide-dark-lighter">
+      {contactsList.length === 0 ? (
+        <div className="p-4 text-center text-gray-400">
+          No WhatsApp contacts yet
         </div>
-        <p className="mt-2 text-sm text-gray-500">
-          For each contact, you'll need to request sync and accept the room invite in your Matrix client to start receiving messages.
-        </p>
-      </div>
-      
-      <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 rounded-lg">
-        <table className="min-w-full divide-y divide-gray-300">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900">Name</th>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Type</th>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Status</th>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Last Message</th>
-              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200 bg-white">
-            {contacts.map((contact) => (
-              <tr key={contact.id}>
-                <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm">
-                  <div className="flex items-center">
-                    {contact.profile_photo_url ? (
-                      <img
-                        src={contact.profile_photo_url}
-                        alt=""
-                        className="h-8 w-8 rounded-full"
-                      />
-                    ) : (
-                      <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center">
-                        <span className="text-gray-500">{contact.display_name?.[0]}</span>
-                      </div>
-                    )}
-                    <div className="ml-4">
-                      <div className="font-medium text-gray-900">{contact.display_name}</div>
-                      <div className="text-gray-500">{contact.whatsapp_id}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                  {contact.is_group ? 'Group' : 'Contact'}
-                </td>
-                <td className="whitespace-nowrap px-3 py-4 text-sm">
-                  <span className={`inline-flex rounded-full px-2 text-xs font-semibold leading-5 ${
-                    contact.sync_status === 'approved' ? 'bg-green-100 text-green-800' :
-                    contact.sync_status === 'rejected' ? 'bg-red-100 text-red-800' :
-                    'bg-yellow-100 text-yellow-800'
-                  }`}>
-                    {contact.sync_status}
-                  </span>
-                </td>
-                <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                  {contact.last_message_at ? new Date(contact.last_message_at).toLocaleString() : 'Never'}
-                  {contact.unread_count > 0 && (
-                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      {contact.unread_count}
-                    </span>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-3 py-4 text-sm text-right space-x-2">
-                  {contact.sync_status === 'pending' ? (
-                    <>
-                      <button
-                        onClick={() => handleSyncApproval(contact.id, 'approved')}
-                        disabled={syncInProgress}
-                        className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => handleSyncApproval(contact.id, 'rejected')}
-                        disabled={syncInProgress}
-                        className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
-                      >
-                        Reject
-                      </button>
-                    </>
-                  ) : contact.sync_status === 'rejected' ? (
-                    <button
-                      onClick={() => handleSyncRequest(contact.id)}
-                      disabled={syncInProgress}
-                      className="inline-flex items-center px-2.5 py-1.5 border border-transparent text-xs font-medium rounded text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      Request Sync
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      ) : (
+        contactsList.map(contact => (
+          <div 
+            key={contact.whatsapp_id} 
+            className="p-4 hover:bg-dark-lighter cursor-pointer flex items-center justify-between transition-colors"
+          >
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-dark-lighter rounded-full flex items-center justify-center">
+                <span className="text-green-500 text-lg">
+                  {contact.is_group ? '👥' : '👤'}
+                </span>
+              </div>
+              <div>
+                <h3 className="font-medium text-white">{contact.display_name}</h3>
+                {contact.last_message && (
+                  <p className="text-sm text-gray-400 truncate max-w-[200px]">
+                    {contact.last_message}
+                  </p>
+                )}
+                {contact.last_message_at && (
+                  <p className="text-xs text-gray-500">
+                    {new Date(contact.last_message_at).toLocaleString()}
+                  </p>
+                )}
+              </div>
+            </div>
+            {contact.unread_count > 0 && (
+              <div className="bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {contact.unread_count}
+              </div>
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 };

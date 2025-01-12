@@ -365,76 +365,54 @@ const PlatformSelectionStep = ({ onNext }) => {
   );
 };
 
-const WhatsAppSetupStep = ({ onNext }) => {
+const WhatsAppSetupStep = () => {
   const { updateOnboardingStep } = useAuth();
   const [showSuccess, setShowSuccess] = useState(false);
   const completionAttemptedRef = useRef(false);
-  const navigate = useNavigate();
-  const navigationTimeoutRef = useRef(null);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (navigationTimeoutRef.current) {
-        clearTimeout(navigationTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const handleComplete = async (data) => {
     try {
-      // Prevent duplicate completion attempts
       if (completionAttemptedRef.current) {
-        console.log('Completion already attempted, ignoring');
+        console.log('Completion already attempted, ignoring duplicate call');
         return;
       }
+
+      console.log('Starting WhatsApp setup completion flow...', { data });
       completionAttemptedRef.current = true;
 
-      console.log('Starting WhatsApp setup completion flow...', data);
-      
-      // First update the WhatsApp status
+      // Update WhatsApp status first
       const statusResponse = await api.post('/matrix/whatsapp/update-status', {
         status: 'connected',
         bridgeRoomId: data.bridgeRoomId
       });
-      console.log('WhatsApp status updated:', statusResponse.data);
+
+      console.log('WhatsApp status update response:', statusResponse.data);
       
       if (statusResponse.data.status !== 'success') {
         throw new Error('Failed to update WhatsApp status');
       }
 
-      // Then update the onboarding step to complete
+      // Update onboarding step
       await updateOnboardingStep('complete');
       console.log('Onboarding step updated to complete');
-      
-      // Show success message and toast
+
+      // Show success UI
       setShowSuccess(true);
-      toast.success('WhatsApp connected successfully! Redirecting to dashboard...');
+      toast.success('WhatsApp connected successfully!');
 
-      // Start message sync in the background
-      api.post('/matrix/whatsapp/sync').catch(error => {
-        console.error('Failed to start message sync:', error);
-        // Don't throw, just log the error
-      });
+      // Start message sync in background
+      api.post('/matrix/whatsapp/sync')
+        .then(() => console.log('Message sync started'))
+        .catch(error => console.error('Message sync error:', error));
 
-      // Clear any existing navigation timeout
-      if (navigationTimeoutRef.current) {
-        clearTimeout(navigationTimeoutRef.current);
-      }
-
-      // Set new navigation timeout
-      navigationTimeoutRef.current = setTimeout(() => {
-        console.log('Executing navigation to dashboard...');
-        navigate('/dashboard', { replace: true });
-      }, 3000);
-      
     } catch (error) {
-      console.error('Error completing WhatsApp setup:', error);
-      completionAttemptedRef.current = false; // Allow retry
+      console.error('Error in WhatsApp setup completion:', error);
+      completionAttemptedRef.current = false;
       toast.error('Failed to complete setup. Please try again.');
     }
   };
 
+  // Success UI render
   if (showSuccess) {
     return (
       <div className="max-w-lg mx-auto text-center p-8 space-y-6">
@@ -446,8 +424,7 @@ const WhatsAppSetupStep = ({ onNext }) => {
           </div>
           <h2 className="text-2xl font-bold text-white">WhatsApp Connected Successfully!</h2>
           <p className="text-gray-300">Your WhatsApp account is now linked to DailyFix</p>
-          <p className="text-sm text-gray-400">Taking you to your dashboard...</p>
-          <p className="text-sm text-gray-400">You'll need to accept room invites for each WhatsApp chat</p>
+          <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full"></div>
         </div>
       </div>
     );
@@ -487,10 +464,23 @@ const Onboarding = () => {
   const location = useLocation();
   const { session, onboardingStatus, updateOnboardingStep } = useAuth();
   const [currentStep, setCurrentStep] = useState(ONBOARDING_STEPS.WELCOME);
+  const navigationAttemptedRef = useRef(false);
 
   useEffect(() => {
     if (!session) {
       navigate('/login');
+      return;
+    }
+
+    // Prevent multiple navigation attempts
+    if (navigationAttemptedRef.current) {
+      return;
+    }
+
+    // If onboarding is complete and we're still on an onboarding route
+    if (onboardingStatus?.currentStep === 'complete' && location.pathname.includes('/onboarding')) {
+      navigationAttemptedRef.current = true;
+      navigate('/dashboard', { replace: true });
       return;
     }
 
@@ -503,14 +493,28 @@ const Onboarding = () => {
     } else {
       // If invalid step, redirect to last known valid step or welcome
       const validStep = onboardingStatus?.currentStep || ONBOARDING_STEPS.WELCOME;
-      navigate(`/onboarding/${validStep}`);
+      if (validStep !== path) {
+        navigate(`/onboarding/${validStep}`);
+      }
     }
   }, [session, location.pathname, onboardingStatus]);
+
+  // Reset navigation attempt ref when component unmounts
+  useEffect(() => {
+    return () => {
+      navigationAttemptedRef.current = false;
+    };
+  }, []);
 
   const handleStepChange = async (nextStep) => {
     try {
       await updateOnboardingStep(nextStep);
-      navigate(`/onboarding/${nextStep}`);
+      if (nextStep === 'complete') {
+        navigationAttemptedRef.current = true;
+        navigate('/dashboard', { replace: true });
+      } else {
+        navigate(`/onboarding/${nextStep}`);
+      }
     } catch (error) {
       console.error('Error changing step:', error);
       toast.error('Failed to proceed to next step. Please try again.');
@@ -526,7 +530,7 @@ const Onboarding = () => {
       case ONBOARDING_STEPS.MATRIX_SETUP:
         return <MatrixSetupStep onNext={() => handleStepChange(ONBOARDING_STEPS.WHATSAPP_SETUP)} />;
       case ONBOARDING_STEPS.WHATSAPP_SETUP:
-        return <WhatsAppSetupStep onNext={() => handleStepChange(ONBOARDING_STEPS.COMPLETION)} />;
+        return <WhatsAppSetupStep />;
       case ONBOARDING_STEPS.PLATFORM_SELECTION:
         return <PlatformSelectionStep onNext={() => handleStepChange(ONBOARDING_STEPS.COMPLETION)} />;
       case ONBOARDING_STEPS.COMPLETION:

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import api from '../utils/api';
 import SyncLogs from './SyncLogs';
 import WhatsAppContactList from './WhatsAppContactList';
@@ -307,8 +307,8 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       clearInterval(pingInterval);
       // Only remove listeners if not in critical states
       if (!['awaiting_scan', 'connecting'].includes(status)) {
-        socket.off('whatsapp_status');
-        socket.off('whatsapp_error');
+      socket.off('whatsapp_status');
+      socket.off('whatsapp_error');
       }
     };
   }, [status, addLog, cleanupTimer, onComplete, startTimer, updateStatus, handleError]);
@@ -402,11 +402,11 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         // Only verify if we're not already connected
         if (status !== 'connected') {
           try {
-            const verifiedStatus = await verifyConnectionStatus();
+          const verifiedStatus = await verifyConnectionStatus();
             if (verifiedStatus?.status === 'connected') {
-              console.log('Connection verified as successful');
-              cleanupTimer();
-              updateStatus('connected', verifiedStatus);
+            console.log('Connection verified as successful');
+            cleanupTimer();
+            updateStatus('connected', verifiedStatus);
               onComplete?.();
             }
           } catch (error) {
@@ -437,16 +437,16 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       
       // Only cleanup if we're in a completely safe state
       if (!['awaiting_scan', 'connecting', 'initial'].includes(currentStatus)) {
-        cleanupTimer();
-        if (reconnectTimeoutRef.current) {
-          clearTimeout(reconnectTimeoutRef.current);
-        }
-        if (socketRef.current) {
+      cleanupTimer();
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (socketRef.current) {
           // Keep socket alive during any non-error state
           if (currentStatus === 'error') {
-            socketRef.current.off('whatsapp_status');
-            socketRef.current.off('whatsapp_error');
-            disconnectSocket();
+        socketRef.current.off('whatsapp_status');
+        socketRef.current.off('whatsapp_error');
+        disconnectSocket();
           }
         }
       } else {
@@ -511,7 +511,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       if (!socket) {
         throw new Error('Failed to establish socket connection after 3 attempts');
       }
-
+      
       // Set up socket events and start the process
       setupSocketEvents();
       
@@ -526,7 +526,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       console.error('Connection failed:', error);
       await handleError(error, 'connect');
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
   }, [status, connectSocket, setupSocketEvents, updateStatus, startTimer, handleError, verifyConnectionStatus]);
 
@@ -569,7 +569,56 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
     handleConnect();
   };
 
+  useEffect(() => {
+    if (status === 'connected') {
+      handleComplete();
+    }
+  }, [status]);
+
+  const handleComplete = async () => {
+    try {
+      // Get bridgeRoomId from the last status update
+      const currentStatus = lastStatusRef.current;
+      if (!currentStatus?.bridgeRoomId) {
+        console.error('No bridgeRoomId found in lastStatusRef');
+        return;
+      }
+      
+      console.log('Completing setup with status:', currentStatus);
+      await onComplete({
+        status: 'connected',
+        bridgeRoomId: currentStatus.bridgeRoomId
+      });
+    } catch (error) {
+      console.error('Error completing setup:', error);
+    }
+  };
+
   const renderContent = () => {
+    if (status === 'connected') {
+      return (
+        <div className="text-center space-y-4">
+          <div className="flex flex-col items-center space-y-4">
+            <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-white">WhatsApp Connected!</h2>
+            <p className="text-gray-300">Your WhatsApp account is now linked</p>
+            <Link 
+              to="/dashboard" 
+              replace={true}
+              className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/80 transition-colors"
+            >
+              Go to Dashboard
+            </Link>
+          </div>
+          <SyncLogs logs={syncLogs} />
+        </div>
+      );
+    }
+
     switch (status) {
       case 'initial':
         return (
@@ -637,38 +686,15 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
           </div>
         );
 
-      case 'connected':
-        return (
-          <div className="w-full space-y-6">
-            <div className="p-4 bg-green-50 border border-green-200 rounded-lg space-y-2">
-              <div className="flex items-center space-x-2">
-                <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                <p className="text-green-600 font-medium">WhatsApp connected successfully!</p>
-              </div>
-              <p className="text-sm text-green-500">
-                Your WhatsApp account is now linked and messages will be bridged through Matrix.
-              </p>
-            </div>
-            <WhatsAppContactList />
-          </div>
-        );
-
       default:
         return null;
     }
   };
 
   return (
-    <div className="flex flex-col items-center justify-center p-6 space-y-6">
-      <h2 className="text-2xl font-semibold text-gray-800">WhatsApp Setup</h2>
+    <div className="max-w-lg mx-auto p-8">
       {renderContent()}
-      {syncLogs.length > 0 && (
-        <div className="w-full max-w-md mt-6">
           <SyncLogs logs={syncLogs} />
-        </div>
-      )}
     </div>
   );
 };
