@@ -16,7 +16,7 @@ const ChatView = ({ selectedContact }) => {
   const [previewMedia, setPreviewMedia] = useState(null);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
-  const { socket } = useSocketConnection('whatsapp');
+  const { socket, isConnected } = useSocketConnection('whatsapp');
   const { user: currentUser } = useAuth();
   const PAGE_SIZE = 30;
 
@@ -54,8 +54,22 @@ const ChatView = ({ selectedContact }) => {
 
   // Process message queue
   const processMessageQueue = useCallback(async () => {
-    if (connectionStatus !== 'connected' || messageQueue.length === 0) return;
+    if (!selectedContact?.whatsapp_id) {
+      console.log('Skipping message queue - no contact selected');
+      return;
+    }
 
+    if (!socket || !isConnected) {
+      console.log('Skipping message queue - socket not ready');
+      return;
+    }
+
+    if (messageQueue.length === 0) {
+      console.log('Message queue is empty');
+      return;
+    }
+
+    console.log('Processing message queue for contact:', selectedContact.whatsapp_id);
     const queue = [...messageQueue];
     setMessageQueue([]);
 
@@ -75,53 +89,34 @@ const ChatView = ({ selectedContact }) => {
         break;
       }
     }
-  }, [connectionStatus, messageQueue, selectedContact]);
+  }, [socket, isConnected, selectedContact, messageQueue]);
 
   // Enhanced fetchMessages with pagination
-  const fetchMessages = async (pageNum = 1, append = false) => {
-    if (!selectedContact?.whatsapp_id || loading) return;
-    
+  const fetchMessages = async (selectedContact, page = 1) => {
     console.log('Fetching messages for contact:', selectedContact);
-    setLoading(true);
-    if (!append) setError(null);
     
+    if (!selectedContact?.whatsapp_id) {
+      console.log('No valid contact ID found:', selectedContact);
+      return;
+    }
+
+    setLoading(true);
     try {
-      const response = await api.get(
-        `/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages`,
-        {
-          params: {
-            page: pageNum,
-            limit: PAGE_SIZE
-          }
-        }
-      );
+      const response = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages`, {
+        params: { page }
+      });
       
-      console.log('Messages API response:', response.data);
-      
-      if (response.data.status === 'success') {
-        const newMessages = response.data.data || [];
+      if (response.data?.data?.messages) {
+        const newMessages = response.data.data.messages;
+        setMessages(prev => [...prev, ...newMessages]);
         setHasMoreMessages(newMessages.length === PAGE_SIZE);
-        
-        setMessages(prev => 
-          append ? [...prev, ...newMessages] : newMessages
-        );
-        
-        if (!append && selectedContact.unread_count > 0) {
-          try {
-            await api.post(`/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages/read`);
-          } catch (readError) {
-            console.error('Error marking messages as read:', readError);
-          }
-        }
-      } else {
-        throw new Error(response.data.message || 'Failed to load messages');
       }
+
+      // Mark messages as read
+      await api.put(`/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages/read`);
     } catch (error) {
       console.error('Error fetching messages:', error);
-      setError(error.message || 'Failed to load messages');
-      if (!append) {
-        toast.error(error.message || 'Failed to load messages');
-      }
+      toast.error('Failed to load messages');
     } finally {
       setLoading(false);
     }
@@ -135,11 +130,11 @@ const ChatView = ({ selectedContact }) => {
     if (container.scrollTop === 0) {
       setPage(prev => {
         const nextPage = prev + 1;
-        fetchMessages(nextPage, true);
+        fetchMessages(selectedContact, nextPage);
         return nextPage;
       });
     }
-  }, [loading, hasMoreMessages]);
+  }, [loading, hasMoreMessages, selectedContact]);
 
   // Media preview handler
   const handleMediaPreview = (media) => {
@@ -149,7 +144,7 @@ const ChatView = ({ selectedContact }) => {
   useEffect(() => {
     if (selectedContact) {
       console.log('Selected contact changed:', selectedContact);
-      fetchMessages();
+      fetchMessages(selectedContact);
     } else {
       setMessages([]);
       setError(null);
@@ -323,12 +318,35 @@ const ChatView = ({ selectedContact }) => {
     }
   };
 
+  // Process message queue only when we have a valid contact
+  useEffect(() => {
+    if (!socket || !isConnected) {
+      console.log('Socket not ready for message queue', { hasSocket: !!socket, isConnected });
+      return;
+    }
+
+    if (!selectedContact?.whatsapp_id) {
+      console.log('No contact selected for message queue');
+      return;
+    }
+
+    if (messageQueue.length === 0) {
+      console.log('Message queue is empty');
+      return;
+    }
+
+    console.log('Processing message queue:', {
+      contactId: selectedContact.whatsapp_id,
+      queueLength: messageQueue.length
+    });
+    processMessageQueue();
+  }, [socket, isConnected, selectedContact, messageQueue]);
+
+  // Show empty state when no contact is selected
   if (!selectedContact) {
     return (
-      <div className="flex-1 bg-[#1a1b26] p-4">
-        <div className="h-full flex items-center justify-center text-gray-400">
-          Select a contact to start chatting
-        </div>
+      <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
+        <p>Select a contact to start chatting</p>
       </div>
     );
   }
@@ -397,7 +415,7 @@ const ChatView = ({ selectedContact }) => {
           <div className="text-center text-red-400">
             {error}
             <button 
-              onClick={() => fetchMessages(1, false)}
+              onClick={() => fetchMessages(selectedContact, 1)}
               className="block mx-auto mt-2 text-sm text-[#1e6853] hover:underline"
             >
               Try again
