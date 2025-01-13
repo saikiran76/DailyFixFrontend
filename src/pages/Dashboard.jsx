@@ -9,6 +9,7 @@ import api from '../utils/api';
 const Dashboard = () => {
   const [selectedPlatform, setSelectedPlatform] = useState(null);
   const [accounts, setAccounts] = useState([]);
+  const [selectedContact, setSelectedContact] = useState(null);
 
   useEffect(() => {
     // Initialize with WhatsApp account if connected
@@ -23,6 +24,7 @@ const Dashboard = () => {
               name: 'WhatsApp'
             }
           ]);
+          setSelectedPlatform('whatsapp');
         }
       } catch (error) {
         console.error('Error fetching WhatsApp status:', error);
@@ -34,6 +36,12 @@ const Dashboard = () => {
 
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
+    setSelectedContact(null); // Reset selected contact when platform changes
+  };
+
+  const handleContactSelect = (contact) => {
+    console.log('Selected contact:', contact);
+    setSelectedContact(contact);
   };
 
   return (
@@ -54,7 +62,10 @@ const Dashboard = () => {
             <h2 className="text-lg font-semibold text-white">Contacts</h2>
           </div>
           <div className="flex-1 overflow-y-auto">
-            <WhatsAppContactList />
+            <WhatsAppContactList 
+              onContactSelect={handleContactSelect}
+              selectedContactId={selectedContact?.whatsapp_id}
+            />
           </div>
         </div>
       </div>
@@ -65,8 +76,8 @@ const Dashboard = () => {
         <TopNavPanel />
 
         {/* Chat View */}
-        <div className="flex-1 p-4 overflow-hidden">
-          <ChatView />
+        <div className="flex-1 overflow-hidden">
+          <ChatView selectedContact={selectedContact} />
         </div>
       </div>
     </div>

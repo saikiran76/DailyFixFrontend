@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import api from '../utils/api';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useAuth } from '../contexts/AuthContext';
+import PropTypes from 'prop-types';
 
 
 const ShimmerContactList = () => (
@@ -19,17 +20,24 @@ const ShimmerContactList = () => (
   </div>
 );
 
-const WhatsAppContactList = () => {
+const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const { session } = useAuth();
   const { socket, isConnected } = useSocketConnection('whatsapp');
 
+  // Validate onContactSelect prop
+  useEffect(() => {
+    if (typeof onContactSelect !== 'function') {
+      console.error('WhatsAppContactList: onContactSelect prop must be a function');
+    }
+  }, [onContactSelect]);
+
   const fetchContacts = async () => {
     try {
       const response = await api.get('/api/whatsapp-entities/contacts');
-      console.log('Fetched contacts:', response.data);
+      console.log('Raw API response:', response.data);
 
       if (response.data.status === 'error') {
         setError(response.data.message);
@@ -37,13 +45,30 @@ const WhatsAppContactList = () => {
         return;
       }
 
-      // Handle nested data structure
+      // Extract contacts from the correct nested path
       const contactsData = response.data.data?.data?.contacts || [];
-      console.log('Parsed contacts:', contactsData);
+      console.log('Extracted contacts:', contactsData);
       
-      // Ensure we're setting an array
-      setContacts(Array.isArray(contactsData) ? contactsData : []);
+      if (!Array.isArray(contactsData)) {
+        console.error('Contacts data is not an array:', contactsData);
+        setError('Invalid contacts data format');
+        setContacts([]);
+        return;
+      }
+
+      // Sort contacts: groups first, then by display name
+      const sortedContacts = [...contactsData].sort((a, b) => {
+        if (a.is_group !== b.is_group) {
+          return b.is_group ? 1 : -1;
+        }
+        return a.display_name.localeCompare(b.display_name);
+      });
+
+      setContacts(sortedContacts);
       setError(null);
+
+      // Log success metrics
+      console.log(`Loaded ${sortedContacts.length} contacts (${sortedContacts.filter(c => c.is_group).length} groups)`);
     } catch (error) {
       console.error('Error fetching contacts:', error);
       toast.error('Failed to fetch WhatsApp contacts');
@@ -51,6 +76,27 @@ const WhatsAppContactList = () => {
       setError('Failed to fetch contacts');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleContactClick = async (contact) => {
+    try {
+      // Request sync if not already synced
+      if (contact.sync_status !== 'approved') {
+        await api.post(`/api/whatsapp-entities/sync/${contact.whatsapp_id}`);
+        toast.info('Syncing messages...');
+      }
+      
+      // Safely call onContactSelect if it exists
+      if (typeof onContactSelect === 'function') {
+        onContactSelect(contact);
+      } else {
+        console.error('onContactSelect is not a function');
+        toast.error('Unable to select contact. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error syncing contact:', error);
+      toast.error('Failed to sync messages');
     }
   };
 
@@ -139,69 +185,143 @@ const WhatsAppContactList = () => {
     }
   }, [socket, isConnected]);
 
-  if (loading) {
-    return <ShimmerContactList />;
-  }
-
-  if (error) {
-    return (
-      <div className="p-4 text-center">
-        <p className="text-red-500 mb-2">{error}</p>
-        <button 
-          onClick={fetchContacts}
-          className="text-primary hover:text-primary-dark transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  // Ensure contacts is always an array before mapping
-  const contactsList = Array.isArray(contacts) ? contacts : [];
-
   return (
     <div className="divide-y divide-dark-lighter">
-      {contactsList.length === 0 ? (
+      {loading ? (
+        <ShimmerContactList />
+      ) : error ? (
+        <div className="p-4 text-center">
+          <p className="text-red-500 mb-2">{error}</p>
+          <button 
+            onClick={fetchContacts}
+            className="text-[#1e6853] hover:text-[#1e6853]/80 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      ) : contacts.length === 0 ? (
         <div className="p-4 text-center text-gray-400">
-          No WhatsApp contacts yet
+          <p>No WhatsApp contacts yet</p>
+          <button
+            onClick={fetchContacts}
+            className="mt-2 text-sm text-[#1e6853] hover:text-[#1e6853]/80 transition-colors"
+          >
+            Refresh
+          </button>
         </div>
       ) : (
-        contactsList.map(contact => (
-          <div 
-            key={contact.whatsapp_id} 
-            className="p-4 hover:bg-dark-lighter cursor-pointer flex items-center justify-between transition-colors"
-          >
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-dark-lighter rounded-full flex items-center justify-center">
-                <span className="text-green-500 text-lg">
-                  {contact.is_group ? '👥' : '👤'}
-                </span>
-              </div>
-              <div>
-                <h3 className="font-medium text-white">{contact.display_name}</h3>
-                {contact.last_message && (
-                  <p className="text-sm text-gray-400 truncate max-w-[200px]">
-                    {contact.last_message}
-                  </p>
-                )}
-                {contact.last_message_at && (
-                  <p className="text-xs text-gray-500">
-                    {new Date(contact.last_message_at).toLocaleString()}
-                  </p>
-                )}
-              </div>
+        <>
+          {/* Groups Section */}
+          {contacts.some(c => c.is_group) && (
+            <div className="bg-[#1a1b26] px-4 py-2 text-sm text-gray-400">
+              Groups
             </div>
-            {contact.unread_count > 0 && (
-              <div className="bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {contact.unread_count}
-              </div>
-            )}
-          </div>
-        ))
+          )}
+          {contacts.filter(c => c.is_group).map(contact => (
+            <ContactItem
+              key={contact.whatsapp_id}
+              contact={contact}
+              isSelected={selectedContactId === contact.whatsapp_id}
+              onClick={() => handleContactClick(contact)}
+            />
+          ))}
+
+          {/* Contacts Section */}
+          {contacts.some(c => !c.is_group) && (
+            <div className="bg-[#1a1b26] px-4 py-2 text-sm text-gray-400">
+              Contacts
+            </div>
+          )}
+          {contacts.filter(c => !c.is_group).map(contact => (
+            <ContactItem
+              key={contact.whatsapp_id}
+              contact={contact}
+              isSelected={selectedContactId === contact.whatsapp_id}
+              onClick={() => handleContactClick(contact)}
+            />
+          ))}
+        </>
       )}
     </div>
   );
 };
+
+// Contact Item Component
+const ContactItem = ({ contact, isSelected, onClick }) => {
+  // Validate required props
+  if (!contact || typeof contact !== 'object') {
+    console.error('ContactItem: contact prop is required and must be an object');
+    return null;
+  }
+
+  const handleClick = (e) => {
+    e.preventDefault();
+    if (typeof onClick === 'function') {
+      onClick(contact);
+    }
+  };
+
+  return (
+    <div 
+      onClick={handleClick}
+      className={`p-4 hover:bg-[#24283b] cursor-pointer flex items-center justify-between transition-colors ${
+        isSelected ? 'bg-[#24283b]' : ''
+      }`}
+    >
+      <div className="flex items-center space-x-3">
+        <div className="w-10 h-10 bg-[#1e6853] rounded-full flex items-center justify-center">
+          {contact.avatar_url ? (
+            <img 
+              src={contact.avatar_url} 
+              alt={contact.display_name}
+              className="w-full h-full rounded-full object-cover"
+            />
+          ) : (
+            <span className="text-white text-lg">
+              {contact.is_group ? '👥' : contact.display_name[0].toUpperCase()}
+            </span>
+          )}
+        </div>
+        <div>
+          <h3 className="font-medium text-white">{contact.display_name}</h3>
+          {contact.last_message && (
+            <p className="text-sm text-gray-400 truncate max-w-[200px]">
+              {contact.last_message}
+            </p>
+          )}
+          {contact.last_message_at && (
+            <p className="text-xs text-gray-500">
+              {new Date(contact.last_message_at).toLocaleString()}
+            </p>
+          )}
+          {contact.sync_status !== 'approved' && (
+            <span className="text-xs text-yellow-500">
+              ⚡ Click to sync messages
+            </span>
+          )}
+        </div>
+      </div>
+      {contact.unread_count > 0 && (
+        <div className="bg-[#1e6853] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+          {contact.unread_count}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Add prop types if available
+if (typeof PropTypes !== 'undefined') {
+  WhatsAppContactList.propTypes = {
+    onContactSelect: PropTypes.func.isRequired,
+    selectedContactId: PropTypes.string
+  };
+
+  ContactItem.propTypes = {
+    contact: PropTypes.object.isRequired,
+    isSelected: PropTypes.bool,
+    onClick: PropTypes.func.isRequired
+  };
+}
 
 export default WhatsAppContactList; 
