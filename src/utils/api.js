@@ -90,23 +90,20 @@ api.interceptors.request.use(
       
       if (session?.access_token) {
         config.headers.Authorization = `Bearer ${session.access_token}`;
-        console.log('Access token found and set in headers');
-      } else {
-        console.warn('No access token available');
       }
+
+      console.log('Access token:', session.access_token);  
+      console.log('Authorization header:', config.headers.Authorization);
 
       // Add request ID for tracking
       config.headers['X-Request-ID'] = crypto.randomUUID();
 
-      // Handle different endpoint types
+      // Ensure URL starts with /connect for Discord endpoints
       if (config.url?.includes('/discord/')) {
         // Remove any existing /connect prefix to avoid duplication
         const cleanUrl = config.url.replace('/connect', '');
+        // Add the /connect prefix
         config.url = `/connect${cleanUrl}`;
-      } else if (config.url?.includes('/matrix/')) {
-        // Ensure matrix endpoints are properly prefixed
-        const cleanUrl = config.url.replace('/matrix', '');
-        config.url = `/matrix${cleanUrl}`;
       }
 
       // Log the final request configuration
@@ -116,7 +113,7 @@ api.interceptors.request.use(
         method: config.method,
         headers: {
           ...config.headers,
-          Authorization: '[REDACTED]'
+          Authorization: config.headers.Authorization ? '[REDACTED]' : undefined
         }
       });
 
@@ -134,67 +131,70 @@ api.interceptors.request.use(
 // Response interceptor
 api.interceptors.response.use(
   (response) => {
-    // Log successful responses
-    console.log('Response:', {
-      url: response.config.url,
-      status: response.status,
-      data: response.data
-    });
+    // Validate response format
+    const { data } = response;
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid response format');
+    }
+
+    // Handle partial responses
+    if (data.status === ResponseStatus.PARTIAL) {
+      console.warn('Received partial response:', data);
+    }
+
     return response;
   },
   async (error) => {
-    // Log the error details
-    console.error('API Error:', {
-      url: error.config?.url,
-      status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
-    });
-
-    // Handle 401 Unauthorized errors
-    if (error.response?.status === 401) {
-      try {
-        // Attempt to refresh the session
-        const { data: { session }, error: refreshError } = await supabase.auth.refreshSession();
-        
-        if (refreshError) {
-          console.error('Session refresh failed:', refreshError);
-          // Clear session and redirect to login
-          await supabase.auth.signOut();
-          window.location.href = '/login';
-          return Promise.reject(error);
-        }
-
-        if (session) {
-          // Retry the original request with new token
-          const originalRequest = error.config;
-          originalRequest.headers.Authorization = `Bearer ${session.access_token}`;
-          return api(originalRequest);
-        }
-      } catch (refreshError) {
-        console.error('Error refreshing session:', refreshError);
-        // Clear session and redirect to login
-        await supabase.auth.signOut();
-        window.location.href = '/login';
-      }
-    }
-
-    // Handle network errors
     if (!error.response) {
-      console.error('Network error:', error.message);
+      // Network error
       return Promise.reject({
-        status: 'error',
-        message: 'Network error. Please check your connection.',
-        error: error.message
+        type: ErrorTypes.NETWORK_ERROR,
+        message: 'Network error occurred',
+        original: error
       });
     }
 
-    // Handle other errors
-    return Promise.reject({
-      status: 'error',
-      message: error.response?.data?.message || 'An unexpected error occurred',
-      error: error.response?.data
-    });
+    const { response } = error;
+    const errorData = {
+      type: ErrorTypes.API_ERROR,
+      status: response.status,
+      message: response.data?.message || 'An error occurred',
+      original: error
+    };
+
+    // Handle specific error types
+    if (response.status === 429) {
+      errorData.type = ErrorTypes.RATE_LIMIT;
+      errorData.retryAfter = parseInt(response.headers['retry-after'] || '5000');
+    } else if (response.status === 401) {
+      errorData.type = ErrorTypes.TOKEN_INVALID;
+      
+      // Try to refresh the session
+      try {
+        const { error: refreshError } = await supabase.auth.refreshSession();
+        if (!refreshError) {
+          // Retry the original request
+          const { config } = error;
+          const { data: { session } } = await supabase.auth.getSession();
+          
+          if (session?.access_token) {
+            config.headers.Authorization = `Bearer ${session.access_token}`;
+            return api(config);
+          }
+        }
+      } catch (refreshError) {
+        console.error('Error refreshing session:', refreshError);
+      }
+    } else if (response.status === 403) {
+      errorData.type = ErrorTypes.TOKEN_EXPIRED;
+    } else if (response.status === 503) {
+      errorData.type = ErrorTypes.SERVICE_UNAVAILABLE;
+    }
+
+    // Add request tracking
+    errorData.requestId = response.config.headers['X-Request-ID'];
+
+    return Promise.reject(errorData);
   }
 );
 

@@ -36,11 +36,12 @@ const Dashboard = () => {
 
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
-    setSelectedContact(null); // Reset selected contact when platform changes
+    // Reset selected contact when platform changes
+    setSelectedContact(null);
   };
 
   const handleContactSelect = (contact) => {
-    console.log('Selected contact:', contact);
+    console.log('Contact selected:', contact);
     setSelectedContact(contact);
   };
 

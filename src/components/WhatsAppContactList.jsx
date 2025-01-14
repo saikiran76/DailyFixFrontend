@@ -24,17 +24,8 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [lastFetchTime, setLastFetchTime] = useState(0);
   const { session } = useAuth();
   const { socket, isConnected } = useSocketConnection('whatsapp');
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [connectionAttempts, setConnectionAttempts] = useState(0);
-  const MAX_RETRIES = 3;
-
-  // Debug session changes
-  useEffect(() => {
-    console.log('Session state changed:', { session, isConnected });
-  }, [session, isConnected]);
 
   // Validate onContactSelect prop
   useEffect(() => {
@@ -43,240 +34,156 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     }
   }, [onContactSelect]);
 
-  const fetchContacts = async (force = false) => {
-    console.log('Fetching contacts, force:', force);
+  const fetchContacts = async () => {
     try {
       const response = await api.get('/api/whatsapp-entities/contacts');
-      console.log('Raw contacts response:', response);
-      
-      // Handle double-nested response structure
-      if (response.data?.data?.data?.contacts) {
-        const sortedContacts = [...response.data.data.data.contacts].sort((a, b) => 
-          (a.display_name || '').localeCompare(b.display_name || '')
-        );
-        console.log('Found contacts:', sortedContacts.length);
-        setContacts(sortedContacts);
-        setError(null);
-      } else {
-        console.error('Invalid response structure:', {
-          hasData1: !!response.data,
-          hasData2: !!response.data?.data,
-          hasData3: !!response.data?.data?.data,
-          hasContacts: !!response.data?.data?.data?.contacts
-        });
-        setError('Failed to load contacts: Invalid response format');
+      console.log('Raw API response:', response.data);
+
+      if (response.data.status === 'error') {
+        setError(response.data.message);
+        setContacts([]);
+        return;
       }
+
+      // Extract contacts from the correct nested path
+      const contactsData = response.data.data?.data?.contacts || [];
+      console.log('Extracted contacts:', contactsData);
+      
+      if (!Array.isArray(contactsData)) {
+        console.error('Contacts data is not an array:', contactsData);
+        setError('Invalid contacts data format');
+        setContacts([]);
+        return;
+      }
+
+      // Sort contacts: groups first, then by display name
+      const sortedContacts = [...contactsData].sort((a, b) => {
+        if (a.is_group !== b.is_group) {
+          return b.is_group ? 1 : -1;
+        }
+        return a.display_name.localeCompare(b.display_name);
+      });
+
+      setContacts(sortedContacts);
+      setError(null);
+
+      // Log success metrics
+      console.log(`Loaded ${sortedContacts.length} contacts (${sortedContacts.filter(c => c.is_group).length} groups)`);
     } catch (error) {
       console.error('Error fetching contacts:', error);
-      setError('Failed to load contacts: ' + (error.message || 'Unknown error'));
+      toast.error('Failed to fetch WhatsApp contacts');
+      setContacts([]);
+      setError('Failed to fetch contacts');
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Debug state changes
-  useEffect(() => {
-    console.log('State updated:', {
-      session,
-      isConnected,
-      hasSocket: !!socket,
-      isInitialized,
-      connectionAttempts
-    });
-  }, [session, isConnected, socket, isInitialized, connectionAttempts]);
-
-  // Single source of truth for initialization
-  useEffect(() => {
-    const initialize = async () => {
-      setError(null);
-
-      if (!session?.access_token) {
-        console.log('Waiting for valid session (no access token):', session);
-        return;
+  const handleContactClick = async (contact) => {
+    try {
+      // Request sync if not already synced
+      if (contact.sync_status !== 'approved') {
+        await api.post(`/api/whatsapp-entities/sync/${contact.whatsapp_id}`);
+        toast.info('Syncing messages...');
       }
-
-      if (!socket || !isConnected) {
-        console.log('Waiting for socket connection...', { hasSocket: !!socket, isConnected });
-        if (connectionAttempts < MAX_RETRIES) {
-          setConnectionAttempts(prev => prev + 1);
-          return;
-        }
-        setError('Failed to connect to WhatsApp. Please refresh.');
-        return;
-      }
-
-      if (isInitialized) {
-        console.log('Already initialized');
-        return;
-      }
-
-      console.log('All conditions met, initializing WhatsApp contact list');
-      setLoading(true);
       
-      try {
-        await fetchContacts(true);
-        setIsInitialized(true);
-        setConnectionAttempts(0);
-        console.log('Successfully initialized contact list');
-      } catch (error) {
-        console.error('Failed to initialize:', error);
-        setError('Failed to load contacts. Please refresh.');
-        if (connectionAttempts < MAX_RETRIES) {
-          setConnectionAttempts(prev => prev + 1);
-        }
-      } finally {
-        setLoading(false);
+      // Safely call onContactSelect if it exists
+      if (typeof onContactSelect === 'function') {
+        onContactSelect(contact);
+      } else {
+        console.error('onContactSelect is not a function');
+        toast.error('Unable to select contact. Please try again.');
       }
-    };
+    } catch (error) {
+      console.error('Error syncing contact:', error);
+      toast.error('Failed to sync messages');
+    }
+  };
 
-    initialize();
-  }, [session, socket, isConnected, connectionAttempts]);
-
-  // Reset state when session changes
   useEffect(() => {
-    if (!session?.access_token) {
-      console.log('No access token, resetting state');
-      setContacts([]);
-      setIsInitialized(false);
-      setConnectionAttempts(0);
-      setError(null);
+    if (session) {
+      fetchContacts();
     }
   }, [session]);
 
-  // Socket event handlers
   useEffect(() => {
-    if (!socket || !isConnected || !isInitialized) {
-      return;
-    }
+    if (socket && isConnected) {
+      console.log('Socket connected, setting up listeners');
 
-    console.log('Setting up socket event handlers');
-
-    const handlers = {
-      'whatsapp:contact_added': (newContact) => {
-        if (!newContact?.whatsapp_id) {
-          console.error('Invalid contact data received');
-          return;
-        }
-
+      // Listen for new contacts
+      socket.on('whatsapp:contact_added', (newContact) => {
+        console.log('New contact added:', newContact);
         setContacts(prevContacts => {
-          const existing = prevContacts.find(c => c.whatsapp_id === newContact.whatsapp_id);
-          if (existing) {
-            return prevContacts.map(c => 
-              c.whatsapp_id === newContact.whatsapp_id 
-                ? { ...c, ...newContact }
-                : c
-            );
+          const contacts = Array.isArray(prevContacts) ? prevContacts : [];
+          const exists = contacts.some(c => c.whatsapp_id === newContact.whatsapp_id);
+          if (!exists) {
+            toast.success(`New contact added: ${newContact.display_name}`);
+            return [...contacts, newContact];
           }
-          return [...prevContacts, newContact].sort((a, b) => {
-            if (a.is_group !== b.is_group) return b.is_group ? 1 : -1;
-            return a.display_name.localeCompare(b.display_name);
-          });
+          return contacts;
         });
-      },
+      });
 
-      'whatsapp:message': (data) => {
-        if (!data?.contact_id || !data?.content) {
-          console.error('Invalid message data received');
-          return;
-        }
-
+      // Listen for messages
+      socket.on('whatsapp:message', (message) => {
+        console.log('New message received:', message);
         setContacts(prevContacts => {
+          if (!Array.isArray(prevContacts)) return [];
           return prevContacts.map(contact => {
-            if (contact.whatsapp_id === data.contact_id) {
+            if (contact.whatsapp_id === message.contactId) {
+              const newUnreadCount = (contact.unread_count || 0) + 1;
+              console.log(`Updating contact ${contact.display_name} with unread count: ${newUnreadCount}`);
               return {
                 ...contact,
-                last_message: data.content,
-                last_message_at: data.timestamp || new Date().toISOString(),
-                unread_count: (contact.unread_count || 0) + 1
+                last_message: message.content,
+                last_message_at: message.timestamp,
+                unread_count: newUnreadCount
               };
             }
             return contact;
           });
         });
-      },
-
-      'whatsapp:read_status': (data) => {
-        if (!data?.contact_id) return;
-
-        setContacts(prevContacts => {
-          return prevContacts.map(contact => 
-            contact.whatsapp_id === data.contact_id
-              ? { ...contact, unread_count: 0 }
-              : contact
-          );
-        });
-      },
-
-      'whatsapp:sync_status': (data) => {
-        if (!data?.contact_id || !data?.status) return;
-
-        setContacts(prevContacts => {
-          return prevContacts.map(contact => 
-            contact.whatsapp_id === data.contact_id
-              ? { ...contact, sync_status: data.status }
-              : contact
-          );
-        });
-      }
-    };
-
-    // Register all handlers
-    Object.entries(handlers).forEach(([event, handler]) => {
-      socket.on(event, handler);
-    });
-
-    // Cleanup
-    return () => {
-      console.log('Cleaning up socket event handlers');
-      Object.entries(handlers).forEach(([event, handler]) => {
-        socket.off(event, handler);
       });
-    };
-  }, [socket, isConnected, isInitialized]);
 
-  // Prevent multiple rapid contact clicks
-  const handleContactClick = async (contact) => {
-    if (!contact?.whatsapp_id) {
-      console.error('Invalid contact:', contact);
-      return;
+      // Listen for read status updates
+      socket.on('whatsapp:read_status', ({ contactId }) => {
+        console.log('Read status update for contact:', contactId);
+        setContacts(prevContacts => {
+          if (!Array.isArray(prevContacts)) return [];
+          return prevContacts.map(contact => {
+            if (contact.whatsapp_id === contactId) {
+              return {
+                ...contact,
+                unread_count: 0
+              };
+            }
+            return contact;
+          });
+        });
+      });
+
+      // Add sync status listener
+      socket.on('whatsapp:sync_started', () => {
+        console.log('WhatsApp contact sync started');
+        setLoading(true);
+        toast.info('Syncing WhatsApp contacts...', {
+          duration: 3000
+        });
+      });
+
+      // Refresh contacts periodically while connected
+      const refreshInterval = setInterval(fetchContacts, 30000);
+
+      return () => {
+        console.log('Cleaning up socket listeners');
+        socket.off('whatsapp:contact_added');
+        socket.off('whatsapp:message');
+        socket.off('whatsapp:read_status');
+        socket.off('whatsapp:sync_started');
+        clearInterval(refreshInterval);
+      };
     }
-
-    // Debounce contact clicks
-    if (loading) {
-      console.log('Still processing previous click');
-      return;
-    }
-
-    setLoading(true);
-    
-    try {
-      // Request sync if needed
-      if (contact.sync_status !== 'approved') {
-        const response = await api.post(`/api/whatsapp-entities/contacts/${contact.whatsapp_id}/sync`);
-        if (response.data.status === 'success') {
-          // Update contact sync status locally
-          setContacts(prevContacts => 
-            prevContacts.map(c => 
-              c.whatsapp_id === contact.whatsapp_id 
-                ? { ...c, sync_status: 'approved' }
-                : c
-            )
-          );
-        } else {
-          throw new Error(response.data.message || 'Sync request failed');
-        }
-      }
-
-      // Notify parent
-      if (typeof onContactSelect === 'function') {
-        onContactSelect(contact);
-      }
-    } catch (error) {
-      console.error('Contact click error:', error);
-      toast.error('Failed to process contact. Please try again.');
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [socket, isConnected]);
 
   return (
     <div className="divide-y divide-dark-lighter">

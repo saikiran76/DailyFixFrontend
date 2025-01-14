@@ -4,6 +4,7 @@ import { FiVideo, FiPhone, FiSearch, FiFile, FiWifi, FiWifiOff, FiMoreVertical }
 import api from '../utils/api';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { debounce } from 'lodash';
 
 const ChatView = ({ selectedContact }) => {
   const [messages, setMessages] = useState([]);
@@ -19,6 +20,7 @@ const ChatView = ({ selectedContact }) => {
   const { socket, isConnected } = useSocketConnection('whatsapp');
   const { user: currentUser } = useAuth();
   const PAGE_SIZE = 30;
+  const [unreadMessageIds, setUnreadMessageIds] = useState(new Set());
 
   // Connection status management
   useEffect(() => {
@@ -54,7 +56,7 @@ const ChatView = ({ selectedContact }) => {
 
   // Process message queue
   const processMessageQueue = useCallback(async () => {
-    if (!selectedContact?.whatsapp_id) {
+    if (!selectedContact?.id) {
       console.log('Skipping message queue - no contact selected');
       return;
     }
@@ -69,14 +71,14 @@ const ChatView = ({ selectedContact }) => {
       return;
     }
 
-    console.log('Processing message queue for contact:', selectedContact.whatsapp_id);
+    console.log('Processing message queue for contact:', selectedContact.id);
     const queue = [...messageQueue];
     setMessageQueue([]);
 
     for (const queuedMessage of queue) {
       try {
         const response = await api.post(
-          `/api/whatsapp-entities/send-message/${selectedContact.whatsapp_id}`,
+          `/api/whatsapp-entities/send-message/${selectedContact.id}`,
           queuedMessage
         );
         if (response.data.status !== 'success') {
@@ -91,32 +93,117 @@ const ChatView = ({ selectedContact }) => {
     }
   }, [socket, isConnected, selectedContact, messageQueue]);
 
+  // Add this function to mark messages as read
+  const markMessagesAsRead = useCallback(
+    debounce(async (messageIds) => {
+      if (!selectedContact?.id || messageIds.length === 0) return;
+
+      try {
+        await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages/read`, {
+          messageIds: Array.from(messageIds)
+        });
+        
+        // Clear the unread messages set after successful marking
+        setUnreadMessageIds(new Set());
+        
+        // Emit socket event to update contact list
+        if (socket && isConnected) {
+          socket.emit('whatsapp:messages_read', {
+            contactId: selectedContact.whatsapp_id
+          });
+        }
+      } catch (error) {
+        console.error('Error marking messages as read:', error);
+      }
+    }, 1000),
+    [selectedContact, socket, isConnected]
+  );
+
   // Enhanced fetchMessages with pagination
   const fetchMessages = async (selectedContact, page = 1) => {
-    console.log('Fetching messages for contact:', selectedContact);
+    console.log('[ChatView] Starting fetchMessages:', {
+      contactId: selectedContact?.id,
+      page,
+      currentMessagesCount: messages.length
+    });
     
-    if (!selectedContact?.whatsapp_id) {
-      console.log('No valid contact ID found:', selectedContact);
+    if (!selectedContact?.id) {
+      console.error('[ChatView] No valid contact ID found:', selectedContact);
       return;
     }
 
     setLoading(true);
     try {
-      const response = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages`, {
-        params: { page }
-      });
+      // Calculate before timestamp based on page and existing messages
+      const before = page > 1 && messages.length > 0 ? messages[0]?.timestamp : undefined;
       
-      if (response.data?.data?.messages) {
-        const newMessages = response.data.data.messages;
-        setMessages(prev => [...prev, ...newMessages]);
-        setHasMoreMessages(newMessages.length === PAGE_SIZE);
+      console.log('[ChatView] Fetching messages with params:', {
+        contactId: selectedContact.id,
+        limit: PAGE_SIZE,
+        before,
+        url: `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`
+      });
+
+      const response = await api.get(
+        `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`,
+        { 
+          params: { 
+            limit: PAGE_SIZE,
+            before
+          }
+        }
+      );
+
+      if (!response.data || !Array.isArray(response.data.data)) {
+        console.error('[ChatView] Invalid response format:', response.data);
+        throw new Error('Invalid response format from server');
       }
 
-      // Mark messages as read
-      await api.put(`/api/whatsapp-entities/contacts/${selectedContact.whatsapp_id}/messages/read`);
+      const newMessages = response.data.data;
+      
+      if (newMessages.length > 0) {
+        console.log('[ChatView] Processed new messages:', {
+          count: newMessages.length,
+          firstMessageTime: newMessages[0]?.timestamp,
+          lastMessageTime: newMessages[newMessages.length - 1]?.timestamp
+        });
+        
+        // Collect unread message IDs
+        const unreadIds = newMessages
+          .filter(msg => msg && !msg.is_read && msg.sender_id !== currentUser?.id)
+          .map(msg => msg.message_id)
+          .filter(Boolean); // Filter out any undefined message_ids
+        
+        if (unreadIds.length > 0) {
+          console.log('[ChatView] Found unread messages:', {
+            count: unreadIds.length,
+            messageIds: unreadIds
+          });
+          setUnreadMessageIds(prev => new Set([...prev, ...unreadIds]));
+        }
+
+        setMessages(prev => {
+          const updated = page === 1 ? newMessages : [...newMessages, ...prev];
+          console.log('[ChatView] Updated messages state:', {
+            previousCount: prev.length,
+            newCount: updated.length,
+            addedCount: newMessages.length
+          });
+          return updated;
+        });
+      } else {
+        console.log('[ChatView] No new messages received');
+      }
+      
+      setHasMoreMessages(newMessages.length === PAGE_SIZE);
     } catch (error) {
-      console.error('Error fetching messages:', error);
-      toast.error('Failed to load messages');
+      console.error('[ChatView] Error fetching messages:', {
+        error,
+        stack: error.stack,
+        response: error.response?.data
+      });
+      setError('Failed to load messages');
+      toast.error('Failed to load messages. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -151,25 +238,175 @@ const ChatView = ({ selectedContact }) => {
     }
   }, [selectedContact]);
 
+  // Media URL conversion helper
+  const convertMatrixMediaUrl = useCallback((mxcUrl) => {
+    if (!mxcUrl || !mxcUrl.startsWith('mxc://')) {
+      console.warn('[ChatView] Invalid mxc URL:', mxcUrl);
+      return null;
+    }
+    
+    try {
+    // Extract server and media ID from mxc URL
+      const match = mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/);
+      if (!match) {
+        console.warn('[ChatView] Failed to parse mxc URL:', mxcUrl);
+        return null;
+      }
+
+      const [, serverName, mediaId] = match;
+      if (!serverName || !mediaId) {
+        console.warn('[ChatView] Missing server name or media ID:', { serverName, mediaId });
+        return null;
+      }
+
+      // Convert to HTTP URL using environment variable
+      const baseUrl = import.meta.env.VITE_MATRIX_MEDIA_HANDLER;
+      if (!baseUrl) {
+        console.error('[ChatView] Missing MATRIX_MEDIA_HANDLER environment variable');
+        return null;
+      }
+
+      const mediaUrl = `${baseUrl}/media/r0/download/${serverName}/${mediaId}`;
+      console.log('[ChatView] Converted media URL:', { 
+        original: mxcUrl, 
+        converted: mediaUrl 
+      });
+      return mediaUrl;
+    } catch (error) {
+      console.error('[ChatView] Error converting media URL:', error);
+      return null;
+    }
+  }, []);
+
+  // Message content renderer
+  const renderMessageContent = useCallback((message) => {
+    if (!message?.content) {
+      console.warn('[ChatView] Empty message content');
+      return null;
+    }
+
+    try {
+      const content = typeof message.content === 'string' ? JSON.parse(message.content) : message.content;
+      console.log('[ChatView] Rendering message:', { 
+        type: content.msgtype,
+        hasUrl: !!content.url,
+        hasBody: !!content.body 
+      });
+
+      switch (content.msgtype) {
+        case 'm.text':
+          return <p className="text-gray-800 break-words">{content.body}</p>;
+          
+        case 'm.image':
+          const imageUrl = convertMatrixMediaUrl(content.url);
+          if (!imageUrl) return <p className="text-red-500">Failed to load image</p>;
+          return (
+            <img 
+              src={imageUrl}
+              alt={content.body || 'Image'}
+              className="max-w-[300px] max-h-[300px] rounded cursor-pointer"
+              onClick={() => handleMediaPreview({ type: 'image', url: imageUrl })}
+              onError={(e) => {
+                console.error('[ChatView] Image load error:', e);
+                e.target.src = '/placeholder-image.png';
+              }}
+            />
+          );
+          
+        case 'm.video':
+          const videoUrl = convertMatrixMediaUrl(content.url);
+          const thumbnailUrl = content.info?.thumbnail_url ? 
+            convertMatrixMediaUrl(content.info.thumbnail_url) : null;
+          
+          if (!videoUrl) return <p className="text-red-500">Failed to load video</p>;
+          
+          return (
+            <video 
+              src={videoUrl}
+              poster={thumbnailUrl}
+              controls
+              className="max-w-[300px] max-h-[300px] rounded"
+              onError={(e) => {
+                console.error('[ChatView] Video load error:', e);
+                e.target.closest('.message').classList.add('media-error');
+              }}
+            >
+              <source src={videoUrl} type={content.info?.mimetype || 'video/mp4'} />
+              Your browser does not support the video tag.
+            </video>
+          );
+        
+        case 'm.audio':
+          const audioUrl = convertMatrixMediaUrl(content.url);
+          if (!audioUrl) return <p className="text-red-500">Failed to load audio</p>;
+          return (
+            <audio
+              src={audioUrl}
+              controls
+              className="max-w-[300px]"
+              onError={(e) => console.error('[ChatView] Audio load error:', e)}
+            >
+              <source src={audioUrl} type={content.info?.mimetype || 'audio/mpeg'} />
+              Your browser does not support the audio tag.
+            </audio>
+          );
+        
+        case 'm.file':
+          const fileUrl = convertMatrixMediaUrl(content.url);
+          if (!fileUrl) return <p className="text-red-500">Failed to load file</p>;
+        return (
+          <a 
+              href={fileUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+              className="flex items-center space-x-2 text-blue-500 hover:text-blue-700"
+          >
+              <FiFile className="w-5 h-5" />
+              <span>{content.body || 'Download file'}</span>
+          </a>
+        );
+      
+      default:
+          console.warn('[ChatView] Unsupported message type:', content.msgtype);
+          return <p className="text-gray-500">Unsupported message type: {content.msgtype}</p>;
+      }
+    } catch (error) {
+      console.error('[ChatView] Error rendering message content:', error);
+      return <p className="text-red-500">Error displaying message</p>;
+    }
+  }, [convertMatrixMediaUrl, handleMediaPreview]);
+
   useEffect(() => {
     if (socket) {
       const handleNewMessage = (message) => {
-        console.log('New message received:', message);
+        console.log('[ChatView] New message received:', message);
         if (message.contact_id === selectedContact?.id) {
-          setMessages(prev => [...prev, message]);
+          setMessages(prev => {
+            // Check if message already exists
+            if (prev.some(m => m.message_id === message.message_id)) {
+              return prev;
+            }
+            const updated = [...prev, message].sort((a, b) => 
+              new Date(b.timestamp) - new Date(a.timestamp)
+            );
+            return updated;
+          });
+          
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
           
-          // Mark new message as read immediately
+          // Mark new message as read if it's not from current user
+          if (message.sender_id !== currentUser?.id) {
           try {
-            api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages/read`);
+              markMessagesAsRead([message.message_id]);
           } catch (error) {
-            console.error('Error marking new message as read:', error);
+              console.error('[ChatView] Error marking new message as read:', error);
+            }
           }
         }
       };
 
       const handleError = (error) => {
-        console.error('Socket error:', error);
+        console.error('[ChatView] Socket error:', error);
         toast.error('Connection error. Messages might be delayed.');
       };
 
@@ -181,7 +418,7 @@ const ChatView = ({ selectedContact }) => {
         socket.off('error', handleError);
       };
     }
-  }, [socket, selectedContact]);
+  }, [socket, selectedContact, currentUser, markMessagesAsRead]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -325,7 +562,7 @@ const ChatView = ({ selectedContact }) => {
       return;
     }
 
-    if (!selectedContact?.whatsapp_id) {
+    if (!selectedContact?.id) {
       console.log('No contact selected for message queue');
       return;
     }
@@ -336,11 +573,18 @@ const ChatView = ({ selectedContact }) => {
     }
 
     console.log('Processing message queue:', {
-      contactId: selectedContact.whatsapp_id,
+      contactId: selectedContact.id,
       queueLength: messageQueue.length
     });
     processMessageQueue();
   }, [socket, isConnected, selectedContact, messageQueue]);
+
+  // Add effect to mark messages as read when they become visible
+  useEffect(() => {
+    if (unreadMessageIds.size > 0) {
+      markMessagesAsRead(Array.from(unreadMessageIds));
+    }
+  }, [unreadMessageIds, markMessagesAsRead]);
 
   // Show empty state when no contact is selected
   if (!selectedContact) {
@@ -558,7 +802,7 @@ const ChatView = ({ selectedContact }) => {
               }
             } catch (error) {
               console.error('Error sending message:', error);
-              toast.error(error.message || 'Failed to send message');
+              toast.error(error.response?.data?.message || 'Failed to send message');
               // Queue message for retry
               setMessageQueue(prev => [...prev, message]);
             }
