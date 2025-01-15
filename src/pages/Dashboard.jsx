@@ -65,7 +65,7 @@ const Dashboard = () => {
           <div className="flex-1 overflow-y-auto">
             <WhatsAppContactList 
               onContactSelect={handleContactSelect}
-              selectedContactId={selectedContact?.whatsapp_id}
+              selectedContactId={selectedContact?.id}
             />
           </div>
         </div>

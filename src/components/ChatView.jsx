@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSocketConnection } from '../hooks/useSocketConnection';
-import { FiVideo, FiPhone, FiSearch, FiFile, FiWifi, FiWifiOff, FiMoreVertical } from 'react-icons/fi';
+import { FiVideo, FiPhone, FiSearch, FiFile, FiWifi, FiWifiOff, FiMoreVertical, FiX, FiFileText } from 'react-icons/fi';
 import api from '../utils/api';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,12 +15,17 @@ const ChatView = ({ selectedContact }) => {
   const [page, setPage] = useState(1);
   const [messageQueue, setMessageQueue] = useState([]);
   const [previewMedia, setPreviewMedia] = useState(null);
+  const [priority, setPriority] = useState(null);
+  const [showSummary, setShowSummary] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [isSummarizing, setIsSummarizing] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const { socket, isConnected } = useSocketConnection('whatsapp');
   const { user: currentUser } = useAuth();
   const PAGE_SIZE = 30;
   const [unreadMessageIds, setUnreadMessageIds] = useState(new Set());
+  const [initializingPriority, setInitializingPriority] = useState(false);
 
   // Connection status management
   useEffect(() => {
@@ -123,6 +128,7 @@ const ChatView = ({ selectedContact }) => {
   const fetchMessages = async (selectedContact, page = 1) => {
     console.log('[ChatView] Starting fetchMessages:', {
       contactId: selectedContact?.id,
+      whatsappId: selectedContact?.whatsapp_id,
       page,
       currentMessagesCount: messages.length
     });
@@ -137,22 +143,31 @@ const ChatView = ({ selectedContact }) => {
       // Calculate before timestamp based on page and existing messages
       const before = page > 1 && messages.length > 0 ? messages[0]?.timestamp : undefined;
       
-      console.log('[ChatView] Fetching messages with params:', {
-        contactId: selectedContact.id,
+      const params = {
         limit: PAGE_SIZE,
-        before,
-        url: `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`
+        ...(before && { before })
+      };
+      
+      const url = `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`;
+      console.log('[ChatView] Making API request:', {
+        method: 'GET',
+        url,
+        params,
+        baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
       });
 
-      const response = await api.get(
-        `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`,
-        { 
-          params: { 
-            limit: PAGE_SIZE,
-            before
-          }
-        }
-      );
+      const response = await api.get(url, { params });
+      
+      console.log('[ChatView] API Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        data: response.data
+      });
 
       if (!response.data || !Array.isArray(response.data.data)) {
         console.error('[ChatView] Invalid response format:', response.data);
@@ -196,6 +211,7 @@ const ChatView = ({ selectedContact }) => {
       }
       
       setHasMoreMessages(newMessages.length === PAGE_SIZE);
+      setError(null);
     } catch (error) {
       console.error('[ChatView] Error fetching messages:', {
         error,
@@ -586,6 +602,101 @@ const ChatView = ({ selectedContact }) => {
     }
   }, [unreadMessageIds, markMessagesAsRead]);
 
+  // Priority initialization
+  const initializePriority = useCallback(async () => {
+    if (!selectedContact?.id) {
+      console.log('[ChatView] No contact selected for priority initialization');
+      return;
+    }
+
+    try {
+      setInitializingPriority(true);
+      // Log the request attempt
+      console.log('[ChatView] Fetching priority for contact:', {
+        contactId: selectedContact.id,
+        whatsappId: selectedContact.whatsapp_id
+      });
+
+      const response = await api.get(`/api/analysis/priority/suggested/${selectedContact.id}`);
+
+      console.log('[ChatView] Priority response:', response.data);
+      
+      if (response.data?.suggestedPriority) {
+        setPriority(response.data.suggestedPriority);
+        if (response.data.wasInitialized) {
+          toast.success('Priority initialized successfully');
+        }
+      } else {
+        console.warn('[ChatView] No priority data in response:', response.data);
+        setPriority(null);
+        toast.error('Failed to initialize priority');
+      }
+    } catch (error) {
+      console.error('[ChatView] Error fetching priority:', error.response || error);
+      setPriority(null);
+      toast.error('Failed to fetch priority');
+    } finally {
+      setInitializingPriority(false);
+    }
+  }, [selectedContact]);
+
+  // Effect for priority initialization
+  useEffect(() => {
+    if (selectedContact?.id) {
+      initializePriority();
+    } else {
+      setPriority(null);
+    }
+  }, [selectedContact, initializePriority]);
+
+  // Summary handler
+  const handleSummaryClick = async () => {
+    if (!selectedContact?.id) {
+      console.log('[ChatView] No contact selected for summary');
+      return;
+    }
+
+    if (messages.length === 0) {
+      console.log('[ChatView] No messages available for summary');
+      toast.error('No messages available to summarize');
+      return;
+    }
+
+    try {
+      setIsSummarizing(true);
+      console.log('[ChatView] Generating summary for contact:', {
+        contactId: selectedContact.id,
+        messageCount: messages.length
+      });
+
+      const response = await api.get(`/api/analysis/summary/${selectedContact.id}`);
+      console.log('[ChatView] Raw summary response:', response.data);
+      
+      // Validate response structure
+      if (!response.data || typeof response.data !== 'object') {
+        console.error('[ChatView] Invalid summary response format:', response.data);
+        throw new Error('Invalid summary response format');
+      }
+      
+      // Log the actual response structure
+      console.log('[ChatView] Response structure:', {
+        summary: response.data.summary,
+        messageCount: response.data.messageCount,
+        timespan: response.data.timespan
+      });
+      
+      // Set the summary and show the modal
+      setSummary(response.data);
+      setShowSummary(true);
+      
+    } catch (error) {
+      console.error('[ChatView] Error generating summary:', error);
+      toast.error('Failed to generate summary');
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
   // Show empty state when no contact is selected
   if (!selectedContact) {
     return (
@@ -596,9 +707,9 @@ const ChatView = ({ selectedContact }) => {
   }
 
   return (
-    <div className="flex-1 bg-[#1a1b26] flex flex-col h-screen">
-      {/* Chat Header */}
-      <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700">
+    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full">
+      {/* Chat Header - Fixed height */}
+      <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
             {selectedContact.avatar_url ? (
@@ -614,7 +725,18 @@ const ChatView = ({ selectedContact }) => {
             )}
           </div>
           <div>
-            <h3 className="font-medium text-white">{selectedContact.display_name}</h3>
+            <div className="flex items-center space-x-2">
+              <h3 className="font-medium text-white">{selectedContact.display_name}</h3>
+              {priority && (
+                <span className={`px-2 py-0.5 text-xs rounded-full ${
+                  priority === 'HIGH' ? 'bg-red-500/20 text-red-400' :
+                  priority === 'MEDIUM' ? 'bg-yellow-500/20 text-yellow-400' :
+                  'bg-green-500/20 text-green-400'
+                }`}>
+                  {priority}
+                </span>
+              )}
+            </div>
             <div className="flex items-center text-sm">
               <span className={`w-2 h-2 rounded-full mr-2 ${
                 connectionStatus === 'connected' ? 'bg-green-500' :
@@ -633,6 +755,14 @@ const ChatView = ({ selectedContact }) => {
               {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
             </div>
           )}
+          <button 
+            onClick={handleSummaryClick}
+            disabled={messages.length === 0 || isSummarizing}
+            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
+          >
+            <FiFileText className="w-5 h-5" />
+          </button>
           <button className="p-2 text-gray-400 hover:text-white transition-colors">
             <FiVideo className="w-5 h-5" />
           </button>
@@ -645,7 +775,7 @@ const ChatView = ({ selectedContact }) => {
         </div>
       </div>
 
-      {/* Messages Area */}
+      {/* Messages Area - Scrollable */}
       <div 
         ref={messagesContainerRef}
         onScroll={handleScroll}
@@ -741,37 +871,8 @@ const ChatView = ({ selectedContact }) => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Media Preview Modal */}
-      {previewMedia && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
-          onClick={() => setPreviewMedia(null)}
-        >
-          <div className="max-w-4xl w-full p-4">
-            {previewMedia.type === 'image' ? (
-              <img 
-                src={previewMedia.url} 
-                alt={previewMedia.caption}
-                className="max-h-[80vh] w-auto mx-auto rounded-lg"
-              />
-            ) : previewMedia.type === 'video' ? (
-              <video 
-                src={previewMedia.url}
-                controls
-                className="max-h-[80vh] w-auto mx-auto rounded-lg"
-              >
-                <source src={previewMedia.url} type={previewMedia.info?.mimetype} />
-              </video>
-            ) : null}
-            {previewMedia.caption && (
-              <p className="text-white text-center mt-4">{previewMedia.caption}</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Message Input */}
-      <div className="px-4 py-3 bg-[#24283b] border-t border-gray-700">
+      {/* Message Input - Fixed height */}
+      <div className="px-4 py-3 bg-[#24283b] border-t border-gray-700 flex-none">
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -825,6 +926,76 @@ const ChatView = ({ selectedContact }) => {
           </button>
         </form>
       </div>
+
+      {/* Summary Modal */}
+      {showSummary && summary && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
+          onClick={() => setShowSummary(false)}
+        >
+          <div 
+            className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-medium text-white">Conversation Summary</h3>
+              <button 
+                onClick={() => setShowSummary(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <FiX className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {summary.summary.mainPoints.length > 0 && (
+                <div>
+                  <h4 className="text-white font-medium mb-2">Main Discussion Points</h4>
+                  <ul className="list-disc list-inside text-gray-300 space-y-1">
+                    {summary.summary.mainPoints.map((point, index) => (
+                      <li key={index}>{point}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              {summary.summary.actionItems.length > 0 && (
+                <div>
+                  <h4 className="text-white font-medium mb-2">Action Items</h4>
+                  <ul className="list-disc list-inside text-gray-300 space-y-1">
+                    {summary.summary.actionItems.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {summary.summary.keyDecisions.length > 0 && (
+                <div>
+                  <h4 className="text-white font-medium mb-2">Key Decisions</h4>
+                  <ul className="list-disc list-inside text-gray-300 space-y-1">
+                    {summary.summary.keyDecisions.map((decision, index) => (
+                      <li key={index}>{decision}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
+                {summary.messageCount > 0 ? (
+                  <>
+                    Analyzed {summary.messageCount} messages from{' '}
+                    {new Date(summary.timespan.start).toLocaleString()} to{' '}
+                    {new Date(summary.timespan.end).toLocaleString()}
+                  </>
+                ) : (
+                  'No messages analyzed'
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
