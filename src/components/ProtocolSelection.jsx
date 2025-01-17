@@ -10,7 +10,6 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
   const handleMatrixSelection = async () => {
     try {
       await updateOnboardingStep('matrix_setup');
-      toast.error('Matrix Protocol integration is currently under maintenance. Please use Direct API Connection for now.');
       navigate('/onboarding/matrix-setup');
     } catch (error) {
       console.error('Error updating onboarding step:', error);
@@ -41,8 +40,8 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
             onClick={handleMatrixSelection}
             className="w-full p-6 border border-gray-700 rounded-lg bg-dark-lighter hover:bg-dark/50 transition-colors text-left relative group"
           >
-            <div className="absolute top-4 right-4 bg-yellow-500/20 text-yellow-500 px-3 py-1 rounded-full text-sm">
-              Under Maintenance
+            <div className="absolute top-4 right-4 bg-green-500/20 text-green-500 px-3 py-1 rounded-full text-sm">
+              Available
             </div>
             
             <h3 className="text-xl font-semibold text-gray-400 mb-2 flex items-center">
@@ -53,8 +52,14 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
             
             <p className="text-gray-500 text-sm">
               Connect using the decentralized Matrix protocol for enhanced security and interoperability.
-              Currently under maintenance.
+              Supports WhatsApp bridging.
             </p>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">WhatsApp</span>
+              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400 opacity-50">Telegram (Coming Soon)</span>
+              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400 opacity-50">Discord (Coming Soon)</span>
+            </div>
           </button>
         </div>
 

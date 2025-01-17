@@ -117,7 +117,7 @@ export const useSocketConnection = (platform) => {
       
       // Initialize socket with connection options
       console.debug('Initializing socket connection to:', SOCKET_SERVER);
-      const socket = io(SOCKET_SERVER, getConnectionOptions(session.access_token, platform));
+      const socket = io(SOCKET_SERVER, getConnectionOptions(session.access_token, platform, session.user.id));
 
       // Set up event handlers
       socket.on('connect', () => {

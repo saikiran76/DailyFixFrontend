@@ -2,13 +2,19 @@ import io from 'socket.io-client';
 import { supabase } from './supabase';
 
 let socketInstance = null;
-const SOCKET_URL = 'http://localhost:3001';
-const RECONNECTION_ATTEMPTS = 5;
-const RECONNECTION_DELAY = 2000;
-const RECONNECTION_DELAY_MAX = 10000;
-
+let connectionAttemptInProgress = false;
+let connectionPromise = null;
 let messageHandler = null;
+const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3001';
 
+const CONNECTION_CONFIG = {
+  RECONNECTION_ATTEMPTS: 3,
+  RECONNECTION_DELAY: 2000,
+  RECONNECTION_DELAY_MAX: 10000,
+  CONNECTION_TIMEOUT: 30000
+};
+
+// Discord message handling
 export const subscribeToDiscordMessages = (channelId, handler) => {
   if (!socketInstance) {
     console.error('Socket not initialized');
@@ -38,120 +44,143 @@ export const unsubscribeFromDiscordMessages = () => {
   }
 };
 
-export const initializeSocket = async (isPlatformConnection = false) => {
-  try {
-    // Return existing socket if it's already connected
-    if (socketInstance?.connected) {
-      console.log('Reusing existing socket connection');
-      return socketInstance;
-    }
+export const initializeSocket = async (options = {}) => {
+  // If there's already a connection attempt in progress, return that promise
+  if (connectionPromise) {
+    console.log('Returning existing connection promise');
+    return connectionPromise;
+  }
 
-    // Clean up existing socket if it exists but isn't connected
-    if (socketInstance) {
-      console.log('Cleaning up existing socket');
-      socketInstance.removeAllListeners();
-      socketInstance.close();
-      socketInstance = null;
-    }
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      throw new Error('No active session');
-    }
-
-    console.log('Initializing socket connection to:', SOCKET_URL);
-
-    socketInstance = io(SOCKET_URL, {
-      auth: {
-        token: session.access_token,
-      },
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: RECONNECTION_ATTEMPTS,
-      reconnectionDelay: RECONNECTION_DELAY,
-      reconnectionDelayMax: RECONNECTION_DELAY_MAX,
-      timeout: isPlatformConnection ? 300000 : 20000, // 5 minutes for platform connections
-      forceNew: false,
-      autoConnect: true,
-      rejectUnauthorized: false,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000
-    });
-
-    // Set up event handlers
-    socketInstance.on('connect', () => {
-      console.log('Socket connected successfully');
-      // Re-authenticate on reconnection
-      socketInstance.emit('authenticate', { token: session.access_token });
-    });
-
-    socketInstance.on('connect_error', async (error) => {
-      console.error('Socket connection error:', error);
-      // Attempt to refresh session on auth errors
-      if (error.message?.includes('Authentication') || error.message?.includes('token')) {
-        try {
-          const { data: { session } } = await supabase.auth.refreshSession();
-          if (session?.access_token) {
-            socketInstance.auth.token = session.access_token;
-            socketInstance.connect();
-          }
-        } catch (refreshError) {
-          console.error('Session refresh failed:', refreshError);
-        }
-      }
-    });
-
-    socketInstance.on('disconnect', (reason) => {
-      console.log('Socket disconnected:', reason);
-      // If the server initiated the disconnect, don't auto-reconnect
-      if (reason === 'io server disconnect') {
-        socketInstance.connect();
-      }
-    });
-
-    socketInstance.on('reconnect', (attemptNumber) => {
-      console.log('Socket reconnected after', attemptNumber, 'attempts');
-    });
-
-    socketInstance.on('reconnect_attempt', (attemptNumber) => {
-      console.log('Socket reconnection attempt:', attemptNumber);
-      // Update auth token on reconnection attempts
-      socketInstance.auth.token = session.access_token;
-    });
-
-    socketInstance.on('reconnect_error', (error) => {
-      console.error('Socket reconnection error:', error);
-    });
-
-    socketInstance.on('reconnect_failed', () => {
-      console.error('Socket reconnection failed after', RECONNECTION_ATTEMPTS, 'attempts');
-      // Clear the instance so next connection attempt creates a new one
-      socketInstance = null;
-    });
-
+  // If socket exists and is connected, return it
+  if (socketInstance?.connected) {
+    console.log('Returning existing connected socket');
     return socketInstance;
+  }
+
+  try {
+    connectionAttemptInProgress = true;
+    connectionPromise = new Promise(async (resolve, reject) => {
+      try {
+        // Clean up existing socket if it exists but isn't connected
+        if (socketInstance && !socketInstance.connected) {
+          console.log('Cleaning up disconnected socket');
+          await disconnectSocket();
+        }
+
+        // Get current Supabase session
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          throw new Error('No valid session found');
+        }
+
+        console.log('Creating new socket connection with auth:', {
+          hasToken: !!session.access_token,
+          userId: session.user.id
+        });
+
+        socketInstance = io(SOCKET_URL, {
+          auth: {
+            token: session.access_token,
+            userId: session.user.id
+          },
+          transports: ['websocket'],
+          reconnection: true,
+          reconnectionAttempts: CONNECTION_CONFIG.RECONNECTION_ATTEMPTS,
+          reconnectionDelay: CONNECTION_CONFIG.RECONNECTION_DELAY,
+          reconnectionDelayMax: CONNECTION_CONFIG.RECONNECTION_DELAY_MAX,
+          timeout: options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT,
+          forceNew: true
+        });
+
+        // Set up connection promise handlers
+        socketInstance.on('connect', () => {
+          console.log('Socket connected successfully');
+          if (options.onConnect) {
+            options.onConnect();
+          }
+          resolve(socketInstance);
+        });
+
+        socketInstance.on('connect_error', async (error) => {
+          console.error('Socket connection error:', error);
+          
+          if (error.message?.includes('Authentication failed')) {
+            // Check current session
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            if (!currentSession?.access_token) {
+              if (options.onAuthError) {
+                options.onAuthError(error);
+              }
+              reject(error);
+            } else {
+              // Update socket auth with current token and reconnect
+              socketInstance.auth.token = currentSession.access_token;
+              socketInstance.auth.userId = currentSession.user.id;
+              socketInstance.connect();
+            }
+          } else if (options.onError) {
+            options.onError(error);
+            reject(error);
+          }
+        });
+
+        socketInstance.on('disconnect', (reason) => {
+          console.log('Socket disconnected:', reason);
+          if (options.onDisconnect) {
+            options.onDisconnect(reason);
+          }
+        });
+
+        // Set timeout for connection
+        const timeout = setTimeout(() => {
+          if (!socketInstance?.connected) {
+            const error = new Error('Socket connection timeout');
+            if (options.onError) {
+              options.onError(error);
+            }
+            reject(error);
+          }
+        }, options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT);
+
+        // Clean up timeout on connection
+        socketInstance.on('connect', () => {
+          clearTimeout(timeout);
+        });
+
+      } catch (error) {
+        console.error('Socket initialization error:', error);
+        reject(error);
+      }
+    });
+
+    return await connectionPromise;
   } catch (error) {
-    console.error('Socket initialization error:', error);
+    console.error('Socket initialization failed:', error);
     throw error;
+  } finally {
+    connectionAttemptInProgress = false;
+    connectionPromise = null;
   }
 };
 
-export const disconnectSocket = () => {
+export const disconnectSocket = async () => {
   if (socketInstance) {
     console.log('Disconnecting socket');
+    // Store the message handler if it exists
+    const existingHandler = messageHandler;
+    
     socketInstance.removeAllListeners();
-    socketInstance.close();
+    socketInstance.disconnect();
     socketInstance = null;
+    connectionPromise = null;
+    
+    // Restore the message handler for next connection
+    messageHandler = existingHandler;
   }
 };
 
 export const getSocket = () => socketInstance;
 
-// Helper function to check socket health
 export const checkSocketHealth = () => {
   if (!socketInstance) {
     return { connected: false, status: 'not_initialized' };

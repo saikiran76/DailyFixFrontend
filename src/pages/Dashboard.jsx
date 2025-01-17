@@ -1,143 +1,86 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { toast } from 'react-hot-toast';
-import api from '../utils/axios';
-import { initializeSocket } from '../utils/socket';
-import LoadingSpinner from '../components/LoadingSpinner';
+import React, { useState, useEffect } from 'react';
+import WhatsAppInvites from '../components/WhatsAppInvites';
 import Sidebar from '../components/Sidebar';
-import UnifiedInbox from '../components/UnifiedInbox';
+import WhatsAppContactList from '../components/WhatsAppContactList';
+import TopNavPanel from '../components/TopNavPanel';
+import ChatView from '../components/ChatView';
+import api from '../utils/api';
 
 const Dashboard = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { session } = useAuth();
-  const [accounts, setAccounts] = useState([]);
-  const [messages, setMessages] = useState([]);
   const [selectedPlatform, setSelectedPlatform] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const socketRef = useRef(null);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedContact, setSelectedContact] = useState(null);
 
   useEffect(() => {
-    if (!session) {
-      navigate('/login');
-      return;
-    }
-
-    const fetchInitialData = async () => {
+    // Initialize with WhatsApp account if connected
+    const initializeAccounts = async () => {
       try {
-        // Fetch connected accounts
-        const accountsResponse = await api.get('/accounts/connected');
-        const connectedAccounts = accountsResponse.data;
-        
-        if (!connectedAccounts || connectedAccounts.length === 0) {
-          navigate('/onboarding/platform-selection');
-          return;
-        }
-
-        setAccounts(connectedAccounts);
-        
-        // Set initial platform from location state or first connected account
-        const locationState = location.state;
-        if (locationState?.platform) {
-          setSelectedPlatform(locationState.platform);
-          if (locationState.view === 'discord-entities') {
-            navigate('/dashboard/discord', { replace: true });
-          }
-        } else if (connectedAccounts.length > 0) {
-          setSelectedPlatform(connectedAccounts[0].platform);
-        }
-
-        // Initialize socket connection
-        const socket = await initializeSocket();
-        if (socket) {
-          socketRef.current = socket;
-          
-          socket.on('connect', () => {
-            console.log('Socket connected');
-            toast.success('Real-time updates enabled');
-          });
-          
-          socket.on('message', (message) => {
-            setMessages(prev => {
-              // Avoid duplicate messages
-              const exists = prev.some(m => m.id === message.id);
-              if (exists) return prev;
-              return [message, ...prev];
-            });
-          });
-
-          socket.on('status_update', (update) => {
-            if (update.type === 'connection_lost') {
-              toast.error(`Lost connection to ${update.platform}`);
-            } else if (update.type === 'connection_restored') {
-              toast.success(`Reconnected to ${update.platform}`);
+        const response = await api.get('/matrix/whatsapp/status');
+        if (response.data.status === 'connected') {
+          setAccounts([
+            {
+              id: 'whatsapp',
+              platform: 'whatsapp',
+              name: 'WhatsApp'
             }
-          });
-
-          socket.on('platform_update', (update) => {
-            if (update.type === 'connected') {
-              setAccounts(prev => [...prev, update.account]);
-              toast.success(`${update.platform} connected`);
-            } else if (update.type === 'disconnected') {
-              setAccounts(prev => prev.filter(a => a.id !== update.accountId));
-              toast.info(`${update.platform} disconnected`);
-            }
-          });
-
-          socket.on('disconnect', () => {
-            toast.error('Lost connection to server');
-          });
-
-          socket.on('reconnect', () => {
-            toast.success('Reconnected to server');
-            // Refresh data on reconnect
-            fetchInitialData();
-          });
+          ]);
+          setSelectedPlatform('whatsapp');
         }
-
       } catch (error) {
-        console.error('Error initializing dashboard:', error);
-        toast.error('Failed to load dashboard data');
-      } finally {
-        setLoading(false);
+        console.error('Error fetching WhatsApp status:', error);
       }
     };
 
-    fetchInitialData();
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-    };
-  }, [session, navigate, location.state]);
+    initializeAccounts();
+  }, []);
 
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
-    if (platform === 'discord') {
-      navigate('/dashboard/discord');
-    }
+    // Reset selected contact when platform changes
+    setSelectedContact(null);
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-dark text-white">
-        <LoadingSpinner />
-      </div>
-    );
-  }
+  const handleContactSelect = (contact) => {
+    console.log('Contact selected:', contact);
+    setSelectedContact(contact);
+  };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-dark text-white">
-      <Sidebar
-        accounts={accounts}
-        selectedPlatform={selectedPlatform}
-        onPlatformSelect={handlePlatformSelect}
-      />
-      <main className="flex-1 overflow-hidden flex flex-col">
-        <Outlet />
-      </main>
+    <div className="flex h-screen bg-dark">
+      {/* Sidebar */}
+      <div className="w-64 bg-dark-darker border-r border-dark-lighter">
+        <Sidebar 
+          accounts={accounts}
+          selectedPlatform={selectedPlatform}
+          onPlatformSelect={handlePlatformSelect}
+        />
+      </div>
+
+      {/* Contact List Panel */}
+      <div className="w-80 bg-dark-darker border-r border-dark-lighter">
+        <div className="h-full flex flex-col">
+          <div className="p-4 border-b border-dark-lighter">
+            <h2 className="text-lg font-semibold text-white">Contacts</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <WhatsAppContactList 
+              onContactSelect={handleContactSelect}
+              selectedContactId={selectedContact?.id}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col bg-dark">
+        {/* Top Navigation Panel */}
+        <TopNavPanel />
+
+        {/* Chat View */}
+        <div className="flex-1 overflow-hidden">
+          <ChatView selectedContact={selectedContact} />
+        </div>
+      </div>
     </div>
   );
 };

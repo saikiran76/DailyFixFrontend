@@ -16,8 +16,8 @@ const ChannelReportView = () => {
       try {
         setLoading(true);
         const [serverResponse, reportResponse] = await Promise.all([
-          axios.get(`http://localhost:3001/discord/servers/${serverId}`),
-          axios.get(`http://localhost:3001/discord/servers/${serverId}/report/${reportId}`)
+          axios.get(`http://localhost:3001/connect/discord/servers/${serverId}`),
+          axios.get(`http://localhost:3001/connect/discord/servers/${serverId}/report/${reportId}`)
         ]);
 
         setServer(serverResponse.data);
@@ -37,7 +37,7 @@ const ChannelReportView = () => {
   const handleDownload = async () => {
     try {
       const response = await axios.get(
-        `http://localhost:3001/discord/servers/${serverId}/report/${reportId}/download`,
+        `http://localhost:3001/connect/discord/servers/${serverId}/report/${reportId}/download`,
         { responseType: 'blob' }
       );
 

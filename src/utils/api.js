@@ -49,11 +49,36 @@ export const ResponseSchemas = {
   }
 };
 
+// const response = await axios.get(
+//   'http://localhost:3001/connect/discord/servers/662267976984297473/channels',
+//   {
+//     headers: {
+//       Authorization: 'Bearer <your_token>',
+//       Accept: 'application/json',
+//       'Content-Type': 'application/json',
+//     },
+//   }
+// );
+// console.log(response.data);
+
 // Create API instance with interceptors
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
   timeout: 30000,
-  withCredentials: true
+  headers: {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json'
+  },
+  withCredentials: false,
+  transformRequest: [
+    (data, headers) => {
+      // Keep the original data transformation
+      if (data && headers['Content-Type'] === 'application/json') {
+        return JSON.stringify(data);
+      }
+      return data;
+    }
+  ]
 });
 
 // Request interceptor
@@ -67,8 +92,30 @@ api.interceptors.request.use(
         config.headers.Authorization = `Bearer ${session.access_token}`;
       }
 
+      console.log('Access token:', session.access_token);  
+      console.log('Authorization header:', config.headers.Authorization);
+
       // Add request ID for tracking
       config.headers['X-Request-ID'] = crypto.randomUUID();
+
+      // Ensure URL starts with /connect for Discord endpoints
+      if (config.url?.includes('/discord/')) {
+        // Remove any existing /connect prefix to avoid duplication
+        const cleanUrl = config.url.replace('/connect', '');
+        // Add the /connect prefix
+        config.url = `/connect${cleanUrl}`;
+      }
+
+      // Log the final request configuration
+      console.log('Request:', {
+        url: config.url,
+        fullUrl: `${config.baseURL}${config.url}`,
+        method: config.method,
+        headers: {
+          ...config.headers,
+          Authorization: config.headers.Authorization ? '[REDACTED]' : undefined
+        }
+      });
 
       return config;
     } catch (error) {
@@ -150,5 +197,33 @@ api.interceptors.response.use(
     return Promise.reject(errorData);
   }
 );
+
+api.getAccessToken = async function() {
+  try {
+    // First try to get the current session directly from Supabase
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token && session?.user?.id) {
+      return {
+        token: session.access_token,
+        userId: session.user.id
+      };
+    }
+
+    // If no session, try to refresh it
+    const { data: { session: refreshedSession } } = await supabase.auth.refreshSession();
+    if (refreshedSession?.access_token && refreshedSession?.user?.id) {
+      return {
+        token: refreshedSession.access_token,
+        userId: refreshedSession.user.id
+      };
+    }
+
+    console.error('No valid session found');
+    return null;
+  } catch (error) {
+    console.error('Error getting access token:', error);
+    return null;
+  }
+};
 
 export default api; 

@@ -1,48 +1,119 @@
-import React, { useState, useCallback } from 'react';
-import { initializeSocket, handleStatusUpdate, handleSocketError, handleSocketDisconnect } from '../services/directServices/whatsappDirect';
+import { useState, useCallback, useEffect } from 'react';
+import { initializeSocket, checkSocketHealth } from '../utils/socket';
 import { api } from '../services/api';
+import { toast } from 'react-hot-toast';
+
+const CONNECTION_CONFIG = {
+  MAX_RETRIES: 3,
+  RETRY_DELAY: 2000,
+  STATUS_CHECK_INTERVAL: 10000
+};
 
 export const useWhatsAppConnection = () => {
   const [state, setState] = useState({
     status: 'initializing',
-    qrCode: null,
     error: null,
     retryCount: 0,
-    isSocketConnected: false
+    isSocketConnected: false,
+    lastStatusCheck: null
   });
+
+  const checkStatus = useCallback(async (socket) => {
+    if (!socket?.connected) {
+      setState(prev => ({
+        ...prev,
+        status: 'disconnected',
+        isSocketConnected: false
+      }));
+      return;
+    }
+
+    try {
+      socket.emit('whatsapp_status_check');
+    } catch (error) {
+      console.error('Status check failed:', error);
+      setState(prev => ({
+        ...prev,
+        error: error.message,
+        lastStatusCheck: new Date()
+      }));
+    }
+  }, []);
 
   const connect = useCallback(async (isRetry = false) => {
     try {
       setState(prev => ({ 
         ...prev, 
         status: 'initializing',
-        error: null,
-        qrCode: null 
+        error: null
       }));
 
-      const socket = await initializeSocket();
-      
+      // Check socket health first
+      const health = checkSocketHealth();
+      let socket;
+
+      if (!health.connected) {
+        // Initialize socket connection with enhanced options
+        socket = await initializeSocket({
+          timeout: 30000,
+          forceNew: false,
+          reconnection: true,
+          reconnectionAttempts: 5,
+          reconnectionDelay: 2000,
+          transports: ['websocket', 'polling'],
+          upgrade: true,
+          rememberUpgrade: true,
+          pingTimeout: 60000,
+          pingInterval: 25000,
+          extraHeaders: {
+            'Connection': 'keep-alive',
+            'Keep-Alive': 'timeout=300'
+          }
+        });
+      } else {
+        socket = health.socket;
+      }
+
       if (!socket) {
         throw new Error('Failed to initialize socket connection');
       }
 
-      const setupSocketListeners = (socket) => {
-        socket.on('whatsapp_status', handleStatusUpdate);
-        socket.on('connect_error', handleSocketError);
-        socket.on('disconnect', handleSocketDisconnect);
-      };
+      setState(prev => ({
+        ...prev,
+        isSocketConnected: true
+      }));
 
-      setupSocketListeners(socket);
+      // Set up WhatsApp status listener
+      socket.on('whatsapp_status', (data) => {
+        setState(prev => ({
+          ...prev,
+          status: data.status,
+          error: null,
+          lastStatusCheck: new Date()
+        }));
 
-      const response = await api.post('/connect/whatsapp/initiate');
-      
-      if (response.data.status === 'error') {
-        throw new Error(response.data.message);
-      }
+        if (data.status === 'connected' || data.status === 'active') {
+          toast.success('WhatsApp connection active');
+        }
+      });
+
+      socket.on('whatsapp_error', (error) => {
+        setState(prev => ({
+          ...prev,
+          status: 'error',
+          error: error.message,
+          lastStatusCheck: new Date()
+        }));
+        toast.error(error.message);
+      });
+
+      // Request WhatsApp connection
+      socket.emit('whatsapp_connect');
 
       return socket;
 
     } catch (error) {
+      console.error('WhatsApp connection error:', error);
       setState(prev => ({
         ...prev,
         status: 'error',
@@ -53,9 +124,34 @@ export const useWhatsAppConnection = () => {
     }
   }, []);
 
+  // Set up periodic status checks
+  useEffect(() => {
+    if (state.status === 'connected' || state.status === 'active') {
+      const interval = setInterval(() => {
+        const socket = checkSocketHealth().socket;
+        if (socket) {
+          checkStatus(socket);
+        }
+      }, CONNECTION_CONFIG.STATUS_CHECK_INTERVAL);
+
+      return () => clearInterval(interval);
+    }
+  }, [state.status, checkStatus]);
+
   return {
     ...state,
     connect,
-    retry: () => connect(true)
+    retry: async () => {
+      if (state.retryCount >= CONNECTION_CONFIG.MAX_RETRIES) {
+        toast.error('Maximum retry attempts reached. Please try again later.');
+        return false;
+      }
+      setState(prev => ({ 
+        ...prev, 
+        retryCount: prev.retryCount + 1
+      }));
+      return connect(true);
+    },
+    checkStatus
   };
 }; 

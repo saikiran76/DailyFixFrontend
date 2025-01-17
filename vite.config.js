@@ -13,37 +13,35 @@ export default defineConfig({
         changeOrigin: true,
         secure: false
       },
-      '/discord': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        secure: false
-      },
-      '/connect/discord/callback': {
+      '/connect/discord': {
         target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req, _res) => {
-            // Forward the authorization header
-            const token = req.headers.authorization;
-            if (token) {
-              proxyReq.setHeader('Authorization', token);
-            }
-
-            // Log the request for debugging
-            console.log('Discord callback request:', {
-              method: req.method,
-              url: req.url,
-              hasAuth: !!token
+            console.log('Discord Request:', {
+              original: req.url,
+              rewritten: proxyReq.path,
+              headers: proxyReq.getHeaders()
             });
           });
         }
       },
-      '/connect': {
+      '/discord': {
         target: 'http://localhost:3001',
         changeOrigin: true,
-        secure: false
+        secure: false,
+        rewrite: (path) => `/connect${path}`,
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Discord Request (rewritten):', {
+              original: req.url,
+              rewritten: proxyReq.path,
+              headers: proxyReq.getHeaders()
+            });
+          });
+        }
       }
     }
   }
-})
+});
