@@ -169,12 +169,12 @@ const ChatView = ({ selectedContact }) => {
         data: response.data
       });
 
-      if (!response.data || !Array.isArray(response.data.data)) {
+      if (!response.data || !Array.isArray(response.data.data.messages)) {
         console.error('[ChatView] Invalid response format:', response.data);
         throw new Error('Invalid response format from server');
       }
 
-      const newMessages = response.data.data;
+      const newMessages = response.data.data.messages;
       
       if (newMessages.length > 0) {
         console.log('[ChatView] Processed new messages:', {
