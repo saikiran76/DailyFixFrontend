@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import api from '../utils/axios';
+import api from '../utils/api';
 import { subscribeToDiscordMessages, unsubscribeFromDiscordMessages } from '../utils/socket';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { toast } from 'react-hot-toast';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from '../utils/axios';
+import axios from 'axios';
 import { FiUser, FiMail, FiClock, FiCalendar } from 'react-icons/fi';
 
 const Settings = ({ user }) => {

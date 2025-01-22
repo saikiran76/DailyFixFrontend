@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from '../utils/axios';
+import axios from 'axios';
 
 const ConversationSummary = ({ roomId, selectedView }) => {
   const [summary, setSummary] = useState(null);

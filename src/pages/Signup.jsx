@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import supabase from '../utils/supabase';
-import api from '../utils/axios';
+import api from '../utils/api';
 import '../styles/Login.css';
 
 const Signup = () => {

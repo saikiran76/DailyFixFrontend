@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import api from '../utils/axios';
+import api from '../utils/api';
 import { supabase } from '../utils/supabase';
 
 const DiscordConnection = () => {

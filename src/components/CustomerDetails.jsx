@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from '../utils/axios';
+import axios from 'axios';
 import { FiUser, FiTag, FiEdit3 } from 'react-icons/fi';
 
 const CustomerDetails = ({ roomId }) => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from '../utils/axios';
+import axios from 'axios';
 import { FiUsers } from 'react-icons/fi';
 
 const RoomManager = ({ onSelectRoom }) => {

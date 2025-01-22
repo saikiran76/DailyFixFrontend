@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { toast } from 'react-hot-toast';
-import api from '../utils/api';
-import { useSocketConnection } from '../hooks/useSocketConnection';
-import { useAuth } from '../contexts/AuthContext';
+import React, { useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useSelector, useDispatch } from 'react-redux';
 import PropTypes from 'prop-types';
-import { FiRefreshCw } from 'react-icons/fi';
+import { fetchContacts, syncContact } from '../store/slices/contactSlice';
+import logger from '../utils/logger';
 
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000;
 
 const ShimmerContactList = () => (
   <div className="space-y-4 p-4">
@@ -41,25 +42,24 @@ const getPriorityText = (priority) => {
   }
 };
 
-const ContactItem = ({ contact, isSelected, onClick, initializingPriority }) => {
-  const handleClick = (e) => {
-    e.preventDefault();
-    onClick(contact);
-  };
+const ContactItem = ({ contact, onClick, isSelected, initializingPriority }) => {
+  // Generate unique key using both id and whatsapp_id
+  const contactKey = `${contact.id}-${contact.whatsapp_id}`;
 
   return (
     <div 
-      onClick={handleClick}
-      className={`p-4 hover:bg-[#24283b] cursor-pointer flex items-center justify-between transition-colors ${
+      key={contactKey}
+      onClick={() => onClick(contact)}
+      className={`flex items-center p-3 cursor-pointer hover:bg-[#24283b] ${
         isSelected ? 'bg-[#24283b]' : ''
       }`}
     >
       <div className="flex items-center space-x-3">
         <div className="relative">
           <div className="w-10 h-10 bg-[#1e6853] rounded-full flex items-center justify-center">
-            {contact.avatar_url ? (
+            {contact.profile_photo_url ? (
               <img 
-                src={contact.avatar_url} 
+                src={contact.profile_photo_url} 
                 alt={contact.display_name}
                 className="w-full h-full rounded-full object-cover"
               />
@@ -73,23 +73,22 @@ const ContactItem = ({ contact, isSelected, onClick, initializingPriority }) => 
           <div className="absolute -top-1 -right-1 group">
             <div 
               className={`w-3 h-3 rounded-full ${
-                initializingPriority === contact.id || initializingPriority === true
+                initializingPriority
                   ? 'bg-gray-500 animate-pulse' 
                   : getPriorityColor(contact.priority)
               }`}
               aria-label={
-                initializingPriority === contact.id || initializingPriority === true
+                initializingPriority
                   ? 'Initializing priority...' 
                   : getPriorityText(contact.priority)
               }
             />
-            {/* Tooltip - Updated positioning */}
+            {/* Tooltip */}
             <div className="absolute hidden group-hover:block w-48 px-2 py-1 bg-gray-900 text-white text-xs rounded-md -top-8 left-[90%] transform -translate-x-[20%] z-10 pointer-events-none">
-              {initializingPriority === contact.id || initializingPriority === true
+              {initializingPriority
                 ? 'Initializing priority...' 
                 : getPriorityText(contact.priority)
               }
-              {/* Add a small arrow/triangle pointing to the priority dot */}
               <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1 w-2 h-2 bg-gray-900 rotate-45"></div>
             </div>
           </div>
@@ -112,307 +111,121 @@ const ContactItem = ({ contact, isSelected, onClick, initializingPriority }) => 
   );
 };
 
+const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const session = useSelector(state => state.auth.session);
+  const contacts = useSelector((state) => state.contacts.items);
+  const loading = useSelector((state) => state.contacts.loading);
+  const error = useSelector((state) => state.contacts.error);
+  const syncStatus = useSelector((state) => state.contacts.syncStatus);
+
+  const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
+    try {
+      logger.info('[WhatsAppContactList] Fetching contacts...');
+      await dispatch(fetchContacts()).unwrap();
+    } catch (err) {
+      logger.error('[WhatsAppContactList] Error fetching contacts:', err);
+      
+      if (retryCount < MAX_RETRIES) {
+        const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
+        logger.info(`[WhatsAppContactList] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+        
+        setTimeout(() => {
+          loadContactsWithRetry(retryCount + 1);
+        }, delay);
+      }
+    }
+  }, [dispatch]);
+
+  const handleContactSelect = useCallback(async (contact) => {
+    try {
+      // If contact needs sync, sync it first
+      if (contact.sync_status !== 'approved' || !contact.last_sync_at || Date.now() - new Date(contact.last_sync_at).getTime() > 300000) {
+        logger.info('[WhatsAppContactList] Syncing contact before selection:', contact.id);
+        await dispatch(syncContact(contact.id)).unwrap();
+      }
+      
+      onContactSelect(contact);
+    } catch (err) {
+      logger.error('[WhatsAppContactList] Error handling contact selection:', err);
+    }
+  }, [dispatch, onContactSelect]);
+
+  useEffect(() => {
+    if (!session) {
+      logger.warn('[WhatsAppContactList] No session found, redirecting to login');
+      navigate('/login');
+      return;
+    }
+
+    loadContactsWithRetry();
+  }, [session, navigate, loadContactsWithRetry]);
+
+  if (loading) {
+    return <ShimmerContactList />;
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center p-4">
+        <p className="text-red-500 mb-2">Failed to load contacts: {error}</p>
+        <button 
+          onClick={() => loadContactsWithRetry()}
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!contacts?.length) {
+    return (
+      <div className="flex items-center justify-center p-4">
+        <p className="text-gray-500">No contacts found</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="contact-list divide-y divide-gray-200">
+      {contacts.map(contact => (
+        <ContactItem
+          key={contact.id}
+          contact={contact}
+          isSelected={contact.id === selectedContactId}
+          onClick={() => handleContactSelect(contact)}
+          initializingPriority={syncStatus[contact.id] === 'syncing'}
+        />
+      ))}
+    </div>
+  );
+};
+
 ContactItem.propTypes = {
   contact: PropTypes.shape({
     id: PropTypes.number.isRequired,
     whatsapp_id: PropTypes.string.isRequired,
     display_name: PropTypes.string.isRequired,
-    avatar_url: PropTypes.string,
+    profile_photo_url: PropTypes.string,
     is_group: PropTypes.bool,
     last_message: PropTypes.string,
     unread_count: PropTypes.number,
     priority: PropTypes.string,
-    last_analysis_at: PropTypes.string
+    last_analysis_at: PropTypes.string,
+    sync_status: PropTypes.string,
+    last_sync_at: PropTypes.string,
+    bridge_room_id: PropTypes.string
   }).isRequired,
   isSelected: PropTypes.bool.isRequired,
   onClick: PropTypes.func.isRequired,
-  initializingPriority: PropTypes.number
+  initializingPriority: PropTypes.bool
 };
 
-const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
-  const [contacts, setContacts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [initializingPriority, setInitializingPriority] = useState(null);
-  const { session } = useAuth();
-  const { socket, isConnected } = useSocketConnection('whatsapp');
-
-  // Validate onContactSelect prop
-  useEffect(() => {
-    if (typeof onContactSelect !== 'function') {
-      console.error('WhatsAppContactList: onContactSelect prop must be a function');
-    }
-  }, [onContactSelect]);
-
-  const fetchContacts = useCallback(async (forceSync = false) => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      console.log('[WhatsApp Contacts] Fetching contacts:', { forceSync });
-      
-      const response = await api.get('/api/whatsapp-entities/contacts', {
-        params: { force: forceSync }
-      });
-
-      if (!response.data?.data) {
-        throw new Error('Invalid response format');
-      }
-
-      const contacts = response.data.data;
-      console.log(`[WhatsApp Contacts] Retrieved ${contacts.length} contacts`);
-      
-      setContacts(contacts);
-      setError(null);
-    } catch (error) {
-      console.error('[WhatsApp Contacts] Error fetching contacts:', error);
-      setError('Failed to load contacts');
-      toast.error('Failed to load contacts. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Initial fetch on mount
-  useEffect(() => {
-    fetchContacts(false); // Don't force sync on initial load
-  }, [fetchContacts]);
-
-  // Handle manual sync button click
-  const handleSyncClick = useCallback(() => {
-    fetchContacts(true); // Force sync when manually requested
-  }, [fetchContacts]);
-
-  const handleContactClick = async (contact) => {
-    console.log('[Priority] Contact clicked:', { 
-      contactId: contact.id, 
-      currentPriority: contact.priority,
-      hasExistingPriority: !!contact.priority,
-      lastAnalysis: contact.last_analysis_at 
-    });
-    
-    // Check if priority needs initialization
-    const needsInitialization = !contact.priority;
-    
-    if (needsInitialization) {
-      console.log('[Priority] Initializing priority for contact:', contact.id);
-      try {
-        setInitializingPriority(contact.id);
-        console.log('[Priority] Making API call to /api/analysis/initialize/' + contact.id);
-        
-        const response = await api.post(`/api/analysis/initialize/${contact.id}`);
-        console.log('[Priority] Initialization response:', response.data);
-        
-        // Check if response has the expected structure and data
-        if (response.data?.data?.priority) {
-          const { priority, lastAnalysis } = response.data.data;
-          
-          setContacts(prevContacts => {
-            const updatedContacts = prevContacts.map(c => 
-              c.id === contact.id 
-                ? { 
-                    ...c, 
-                    priority,
-                    last_analysis_at: lastAnalysis 
-                  } 
-                : c
-            );
-            console.log('[Priority] Updated contacts state:', {
-              contactId: contact.id,
-              oldPriority: contact.priority,
-              newPriority: priority,
-              totalContacts: updatedContacts.length
-            });
-            return updatedContacts;
-          });
-        } else {
-          console.warn('[Priority] No priority data in response:', response.data);
-          toast.error('Failed to initialize contact priority: No priority data');
-        }
-      } catch (error) {
-        console.error('[Priority] Initialization error:', error);
-        toast.error('Failed to initialize contact priority');
-      } finally {
-        setInitializingPriority(null);
-        console.log('[Priority] Initialization completed for contact:', contact.id);
-      }
-    } else {
-      console.log('[Priority] Contact already has valid priority:', {
-        contactId: contact.id,
-        priority: contact.priority,
-        lastAnalysis: contact.last_analysis_at
-      });
-    }
-    
-    if (typeof onContactSelect === 'function') {
-      onContactSelect(contact);
-    }
-  };
-
-  useEffect(() => {
-    if (session) {
-      fetchContacts();
-    }
-  }, [session]);
-
-  useEffect(() => {
-    if (socket && isConnected) {
-      console.log('Socket connected, setting up listeners');
-
-      // Listen for new contacts
-      socket.on('whatsapp:contact_added', (newContact) => {
-        console.log('New contact added:', newContact);
-        setContacts(prevContacts => {
-          const contacts = Array.isArray(prevContacts) ? prevContacts : [];
-          const exists = contacts.some(c => c.whatsapp_id === newContact.whatsapp_id);
-          if (!exists) {
-            toast.success(`New contact added: ${newContact.display_name}`);
-            return [...contacts, newContact];
-          }
-          return contacts;
-        });
-      });
-
-      // Listen for messages
-      socket.on('whatsapp:message', (message) => {
-        console.log('New message received:', message);
-        setContacts(prevContacts => {
-          if (!Array.isArray(prevContacts)) return [];
-          return prevContacts.map(contact => {
-            if (contact.whatsapp_id === message.contactId) {
-              const newUnreadCount = (contact.unread_count || 0) + 1;
-              console.log(`Updating contact ${contact.display_name} with unread count: ${newUnreadCount}`);
-              return {
-                ...contact,
-                last_message: message.content,
-                last_message_at: message.timestamp,
-                unread_count: newUnreadCount
-              };
-            }
-            return contact;
-          });
-        });
-      });
-
-      // Listen for read status updates
-      socket.on('whatsapp:read_status', ({ contactId }) => {
-        console.log('Read status update for contact:', contactId);
-        setContacts(prevContacts => {
-          if (!Array.isArray(prevContacts)) return [];
-          return prevContacts.map(contact => {
-            if (contact.whatsapp_id === contactId) {
-              return {
-                ...contact,
-                unread_count: 0
-              };
-            }
-            return contact;
-          });
-        });
-      });
-
-      // Add sync status listener
-      socket.on('whatsapp:sync_started', () => {
-        console.log('WhatsApp contact sync started');
-        setLoading(true);
-        toast.info('Syncing WhatsApp contacts...', {
-          duration: 3000
-        });
-      });
-
-      // Refresh contacts periodically while connected
-      const refreshInterval = setInterval(fetchContacts, 30000);
-
-      return () => {
-        console.log('Cleaning up socket listeners');
-        socket.off('whatsapp:contact_added');
-        socket.off('whatsapp:message');
-        socket.off('whatsapp:read_status');
-        socket.off('whatsapp:sync_started');
-        clearInterval(refreshInterval);
-      };
-    }
-  }, [socket, isConnected]);
-
-  return (
-    <div className="flex flex-col h-full bg-[#1a1b26]">
-      {/* Header */}
-      <div className="p-4 flex justify-between items-center border-b border-gray-700">
-        <h2 className="text-lg font-medium text-white">Contacts</h2>
-        <button
-          onClick={handleSyncClick}
-          disabled={loading}
-          className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-          title="Sync contacts"
-        >
-          <FiRefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      {/* Contact List */}
-      <div className="flex-1 overflow-y-auto">
-        {loading && !contacts.length ? (
-          <div className="flex justify-center items-center h-full">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#1e6853]"></div>
-          </div>
-        ) : error ? (
-          <div className="text-center p-4 text-red-400">
-            {error}
-            <button
-              onClick={() => fetchContacts(true)}
-              className="block mx-auto mt-2 text-sm text-[#1e6853] hover:underline"
-            >
-              Try again
-            </button>
-          </div>
-        ) : contacts.length === 0 ? (
-          <div className="text-center p-4 text-gray-400">
-            No contacts found
-          </div>
-        ) : (
-          <div className="space-y-1 p-2">
-            {contacts.map(contact => (
-              <ContactItem
-                key={contact.id}
-                contact={contact}
-                isSelected={Boolean(selectedContactId && contact.id === Number(selectedContactId))}
-                onClick={handleContactClick}
-                initializingPriority={initializingPriority}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+WhatsAppContactList.propTypes = {
+  onContactSelect: PropTypes.func.isRequired,
+  selectedContactId: PropTypes.number
 };
-
-// Add prop types if available
-if (typeof PropTypes !== 'undefined') {
-  WhatsAppContactList.propTypes = {
-    onContactSelect: PropTypes.func.isRequired,
-    selectedContactId: PropTypes.oneOfType([
-      PropTypes.string,
-      PropTypes.number
-    ])
-  };
-
-  ContactItem.propTypes = {
-    contact: PropTypes.shape({
-      id: PropTypes.number.isRequired,
-      whatsapp_id: PropTypes.string.isRequired,
-      display_name: PropTypes.string.isRequired,
-      avatar_url: PropTypes.string,
-      is_group: PropTypes.bool,
-      last_message: PropTypes.string,
-      unread_count: PropTypes.number,
-      priority: PropTypes.string,
-      last_analysis_at: PropTypes.string
-    }).isRequired,
-    isSelected: PropTypes.bool.isRequired,
-    onClick: PropTypes.func.isRequired,
-    initializingPriority: PropTypes.number
-  };
-}
 
 export default WhatsAppContactList; 
