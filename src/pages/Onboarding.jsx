@@ -448,20 +448,31 @@ const WhatsAppSetupStep = () => {
 const CompletionStep = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const [hasAttempted, setHasAttempted] = useState(false);
 
   useEffect(() => {
     const redirectToDashboard = async () => {
+      // If we've already attempted to update, just redirect
+      if (hasAttempted) {
+        navigate('/dashboard', { replace: true });
+        return;
+      }
+
       try {
+        setHasAttempted(true);
         await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
         navigate('/dashboard', { replace: true });
       } catch (error) {
+        // Log error but continue to dashboard
         console.error('Error in completion step:', error);
-        toast.error('Failed to complete onboarding. Please try again.');
+        // Single error toast instead of multiple
+        toast.error('Note: Failed to save onboarding status, but continuing to dashboard...');
+        navigate('/dashboard', { replace: true });
       }
     };
 
     redirectToDashboard();
-  }, [dispatch, navigate]);
+  }, [dispatch, navigate, hasAttempted]);
 
   return (
     <div className="max-w-lg mx-auto text-center p-8">

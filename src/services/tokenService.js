@@ -17,6 +17,8 @@ class TokenService {
       }
 
       const { data: { session } } = await supabase.auth.getSession();
+
+      logger.info('session fetching at getValidToken', { data: session })
       
       if (!session) {
         throw new Error('No session found');

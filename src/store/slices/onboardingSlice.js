@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { supabase } from '../../utils/supabase';
+import api from '../../utils/api';
 import logger from '../../utils/logger';
 
 const ONBOARDING_STEPS = {
@@ -14,18 +15,16 @@ export const fetchOnboardingStatus = createAsyncThunk(
   'onboarding/fetchStatus',
   async (_, { rejectWithValue }) => {
     try {
-      const { data, error } = await supabase
-        .from('user_onboarding')
-        .select('*')
-        .single();
+      const { data: response, error } = await api.get('/user/onboarding-status');
 
       if (error) throw error;
 
       return {
-        currentStep: data?.current_step || ONBOARDING_STEPS.WELCOME,
-        matrixConnected: data?.matrix_connected || false,
-        whatsappConnected: data?.whatsapp_connected || false,
-        completedSteps: data?.completed_steps || []
+        currentStep: response?.currentStep || ONBOARDING_STEPS.WELCOME,
+        matrixConnected: response?.matrixConnected || false,
+        whatsappConnected: response?.whatsappConnected || false,
+        isComplete: response?.isComplete || false,
+        connectedPlatforms: response?.connectedPlatforms || []
       };
     } catch (error) {
       logger.error('[Onboarding] Error fetching status:', error);
@@ -38,17 +37,17 @@ export const updateOnboardingStep = createAsyncThunk(
   'onboarding/updateStep',
   async ({ step, data = {} }, { rejectWithValue }) => {
     try {
-      const { error } = await supabase
-        .from('user_onboarding')
-        .upsert({
-          current_step: step,
-          ...data,
-          updated_at: new Date().toISOString()
-        });
+      const response = await api.post('/user/onboarding-status', {
+        currentStep: step,
+        ...data
+      });
 
-      if (error) throw error;
+      if (response.error) throw response.error;
 
-      return { step, ...data };
+      return { 
+        step,
+        ...response.data
+      };
     } catch (error) {
       logger.error('[Onboarding] Error updating step:', error);
       return rejectWithValue(error.message);

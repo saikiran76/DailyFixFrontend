@@ -19,6 +19,15 @@ let connectionPromise = null;
 let messageHandler = null;
 let connectionAttemptInProgress = false;
 
+let socketState = {
+  authenticated: false,
+  connecting: false,
+  connectionStart: Date.now(),
+  lastActivity: Date.now(),
+  pendingOperations: new Set(),
+  roomSubscriptions: new Set()
+};
+
 // Discord message handling
 export const subscribeToDiscordMessages = (channelId, handler) => {
   if (!socketInstance) {
@@ -69,10 +78,25 @@ export const initializeSocket = async (options = {}) => {
           await cleanupSocket();
         }
 
-        // Get valid token using token service
-        const tokens = await tokenService.getValidToken();
-        if (!tokens?.access_token) {
-          throw new Error('No valid token available');
+        // Get valid token using token service with retry
+        let tokens = null;
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        while (!tokens && retryCount < maxRetries) {
+          try {
+            tokens = await tokenService.getValidToken();
+            logger.info('---tokens----', tokens)
+            if (!tokens?.access_token) {
+              throw new Error('No valid token available');
+            }
+          } catch (error) {
+            retryCount++;
+            if (retryCount === maxRetries) {
+              throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          }
         }
 
         logger.info('Creating new socket connection', {
@@ -91,19 +115,31 @@ export const initializeSocket = async (options = {}) => {
           reconnectionDelay: CONNECTION_CONFIG.RECONNECTION_DELAY,
           reconnectionDelayMax: CONNECTION_CONFIG.RECONNECTION_DELAY_MAX,
           timeout: options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT,
-          forceNew: true
+          forceNew: true,
+          autoConnect: false // Prevent auto-connection before setup
         });
 
-        // Subscribe to token updates
+        // Subscribe to token updates with error handling
         const unsubscribe = tokenService.subscribe(async (newTokens) => {
-          if (socketInstance?.connected) {
-            logger.info('Updating socket authentication with new token');
-            socketInstance.auth.token = newTokens.access_token;
-            socketInstance.auth.userId = newTokens.userId;
+          try {
+            if (socketInstance?.connected) {
+              logger.info('Updating socket authentication with new token');
+              socketInstance.auth.token = newTokens.access_token;
+              socketInstance.auth.userId = newTokens.userId;
+            }
+          } catch (error) {
+            logger.error('Error updating socket token:', error);
           }
         });
 
+        // Store unsubscribe function for cleanup
+        socketInstance._tokenUnsubscribe = unsubscribe;
+
+        // Set up listeners before connecting
         setupSocketListeners(socketInstance, { ...options, unsubscribe }, resolve, reject);
+
+        // Now connect
+        socketInstance.connect();
 
       } catch (error) {
         logger.error('Socket initialization error:', error);
@@ -144,12 +180,20 @@ export const getSocket = () => socketInstance;
 
 export const checkSocketHealth = () => {
   if (!socketInstance) {
-    return { connected: false, status: 'not_initialized' };
+    return { connected: false, status: 'not_initialized', socket: null };
   }
-  return {
+
+  const health = {
     connected: socketInstance.connected,
-    status: socketInstance.connected ? 'connected' : 'disconnected'
+    status: socketInstance.connected ? 'connected' : 'disconnected',
+    socket: socketInstance,
+    lastActivity: socketState.lastActivity,
+    authenticated: socketState.authenticated,
+    pendingOperations: socketState.pendingOperations.size,
+    reconnectAttempts: 0
   };
+
+  return health;
 };
 
 export function useSocket() {
@@ -181,7 +225,7 @@ const handleTokenRefresh = async (socket, retryCount = 0) => {
   }
 };
 
-const handleReconnect = async () => {
+const handleReconnect = async (socket, options = {}) => {
   if (socketState.connecting) return;
   socketState.connecting = true;
 
@@ -189,21 +233,23 @@ const handleReconnect = async () => {
     // Enhanced token refresh with retries
     const tokens = await handleTokenRefresh(socket);
     
-    socket.auth.token = tokens.access_token;
-    socket.auth.userId = tokens.userId;
-    
-    // Update socket state before reconnect
-    socketState.lastTokenRefresh = Date.now();
-    socketState.authenticated = false;
-    
-    socket.connect();
+    if (socket) {
+      socket.auth.token = tokens.access_token;
+      socket.auth.userId = tokens.userId;
+      
+      // Update socket state before reconnect
+      socketState.lastTokenRefresh = Date.now();
+      socketState.authenticated = false;
+      
+      socket.connect();
 
-    logger.info('Reconnection initiated with fresh tokens', {
-      userId: tokens.userId,
-      tokenRefreshTime: socketState.lastTokenRefresh
-    });
+      logger.info('Reconnection initiated with fresh tokens', {
+        userId: tokens.userId,
+        tokenRefreshTime: socketState.lastTokenRefresh
+      });
+    }
   } catch (error) {
-    logger.info('Reconnection failed after token refresh attempts:', error);
+    logger.error('Reconnection failed after token refresh attempts:', error);
     if (options.onAuthError) {
       options.onAuthError(error);
     }
@@ -218,14 +264,27 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
   const INITIAL_RETRY_DELAY = 1000;
   let heartbeatTimeout = null;
   let lastHeartbeat = Date.now();
+  let connectionTimeout = null;
 
-  const socketState = {
+  // Reset socket state for new connection
+  socketState = {
     authenticated: false,
     connecting: false,
     connectionStart: Date.now(),
     lastActivity: Date.now(),
     pendingOperations: new Set(),
     roomSubscriptions: new Set()
+  };
+
+  const clearTimeouts = () => {
+    if (heartbeatTimeout) {
+      clearTimeout(heartbeatTimeout);
+      heartbeatTimeout = null;
+    }
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
   };
 
   const updateSocketMetrics = () => {
@@ -245,14 +304,34 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
     return metrics;
   };
 
+  // Enhanced connection timeout with retry
+  const setupConnectionTimeout = () => {
+    clearTimeout(connectionTimeout);
+    connectionTimeout = setTimeout(async () => {
+      if (!socket.connected) {
+        logger.error('Socket connection timeout');
+        
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          logger.info('Attempting reconnection after timeout');
+          await handleReconnect(socket, options);
+        } else {
+          const error = new Error('Socket connection timeout after retries');
+          if (options.onError) {
+            options.onError(error);
+          }
+          reject(error);
+        }
+      }
+    }, options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT);
+  };
+
   socket.on('connect_error', async (error) => {
-    logger.info('Socket connection error:', error);
+    logger.error('Socket connection error:', error);
     
     if (error.message.includes('auth')) {
-      // Handle auth errors
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
-        await handleReconnect();
+        await handleReconnect(socket, options);
       } else {
         if (options.onAuthError) {
           options.onAuthError(error);
@@ -260,7 +339,6 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
         reject(error);
       }
     } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      // Handle other connection errors with exponential backoff
       reconnectAttempts++;
       const baseDelay = INITIAL_RETRY_DELAY * Math.pow(2, reconnectAttempts - 1);
       const jitter = Math.floor(Math.random() * 1000);
@@ -270,7 +348,7 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
       
       setTimeout(() => {
         if (!socket.connected) {
-          handleReconnect();
+          handleReconnect(socket, options);
         }
       }, delay);
     } else if (options.onError) {
@@ -322,7 +400,7 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
 
   socket.on('disconnect', async (reason) => {
     logger.info('Socket disconnected:', reason);
-    clearTimeout(heartbeatTimeout);
+    clearTimeouts();
     
     // Update state
     socketState.authenticated = false;
@@ -334,7 +412,7 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
     // Handle disconnects that should trigger a reconnect
     if (reason === 'io server disconnect' || reason === 'transport close') {
       reconnectAttempts = 0; // Reset counter for new connection attempt
-      handleReconnect();
+      handleReconnect(socket, options);
     }
     
     if (options.onDisconnect) {
@@ -383,7 +461,7 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
       });
       
       if (!socket.connected) {
-        handleReconnect();
+        handleReconnect(socket, options);
       }
     }, 45000); // 45 second timeout
   });
@@ -418,23 +496,15 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
     });
   });
 
-  // Set connection timeout
-  const connectionTimeout = setTimeout(() => {
-    if (!socket.connected) {
-      const error = new Error('Socket connection timeout');
-      if (options.onError) {
-        options.onError(error);
-      }
-      reject(error);
-    }
-  }, options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT);
-
   socket.on('connect', () => {
-    clearTimeout(connectionTimeout);
+    clearTimeouts();
     socketState.connectionStart = Date.now();
     socketState.lastActivity = Date.now();
     resolve(socket);
   });
+
+  // Set initial connection timeout
+  setupConnectionTimeout();
 };
 
 const socketManager = {

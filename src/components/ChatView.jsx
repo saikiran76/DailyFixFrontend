@@ -10,6 +10,9 @@ import logger from '../utils/logger';
 import { MessageBatchProcessor } from '../utils/MessageBatchProcessor';
 import { debounce } from 'lodash';
 
+// Import environment variables
+const API_URL = import.meta.env.VITE_API_URL;
+
 const ERROR_MESSAGES = {
   NETWORK_ERROR: 'Connection lost. Retrying...',
   AUTH_ERROR: 'Authentication failed. Please try logging in again.',
@@ -17,6 +20,94 @@ const ERROR_MESSAGES = {
   VALIDATION_ERROR: 'Invalid data received. Please refresh the page.',
   SYNC_ERROR: 'Error syncing messages. Retrying...',
   UNKNOWN_ERROR: 'An unexpected error occurred. Retrying...'
+};
+
+// Update sync states to match database constraints
+const SYNC_STATES = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected'
+};
+
+const SYNC_STATUS_MESSAGES = {
+  [SYNC_STATES.PENDING]: 'Waiting for sync approval...',
+  [SYNC_STATES.APPROVED]: 'Sync in progress...',
+  [SYNC_STATES.REJECTED]: 'Sync request rejected'
+};
+
+const INITIAL_SYNC_STATE = {
+  state: SYNC_STATES.PENDING,
+  progress: 0,
+  details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING],
+  processedMessages: 0,
+  totalMessages: 0,
+  errors: []
+};
+
+const SyncProgressIndicator = ({ syncState }) => {
+  if (syncState.state === SYNC_STATES.REJECTED) {
+    return (
+      <div className="absolute top-0 left-0 right-0 z-10">
+        <div className="flex flex-col space-y-2 p-4 bg-[#24283b] rounded-lg shadow-lg m-4">
+          <div className="text-sm text-red-400">
+            {syncState.details || SYNC_STATUS_MESSAGES[SYNC_STATES.REJECTED]}
+          </div>
+          {syncState.errors.length > 0 && (
+            <div className="text-xs text-gray-500">
+              {syncState.errors[syncState.errors.length - 1].message}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (syncState.state !== SYNC_STATES.APPROVED) {
+    return null;
+  }
+
+  return (
+    <div className="absolute top-0 left-0 right-0 z-10">
+      <div className="flex flex-col space-y-2 p-4 bg-[#24283b] rounded-lg shadow-lg m-4">
+        <div className="flex justify-between text-sm text-gray-400">
+          <span>{syncState.details || SYNC_STATUS_MESSAGES[syncState.state]}</span>
+          <span>{syncState.progress}%</span>
+        </div>
+        <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-[#1e6853] transition-all duration-300 ease-out"
+            style={{ width: `${syncState.progress}%` }}
+          />
+        </div>
+        {syncState.processedMessages > 0 && (
+          <div className="text-xs text-gray-500">
+            {syncState.processedMessages} of {syncState.totalMessages} messages processed
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const handleSyncError = (error, contactId) => {
+  const errorMessage = error?.response?.data?.message || error?.message || 'An unknown error occurred';
+  
+  setSyncState(prev => ({
+    ...prev,
+    state: SYNC_STATES.REJECTED,
+    errors: [...prev.errors, {
+      message: errorMessage,
+      timestamp: Date.now()
+    }]
+  }));
+
+  setError(`Message sync failed: ${errorMessage}`);
+  
+  console.error('[ChatView] Sync error:', {
+    contactId,
+    error: errorMessage,
+    timestamp: new Date().toISOString()
+  });
 };
 
 const ChatView = ({ selectedContact, onContactUpdate }) => {
@@ -39,83 +130,73 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const [totalMessages, setTotalMessages] = useState(0);
   const [syncStatus, setSyncStatus] = useState('idle');
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const messagesEndRef = useRef(null);
-  const messagesContainerRef = useRef(null);
-  const { socket, isConnected } = useSocketConnection('whatsapp');
-  const messageCache = useRef(new Map());
-  const isMounted = useRef(true);
-  const PAGE_SIZE = 30;
   const [unreadMessageIds, setUnreadMessageIds] = useState(new Set());
-  const batchProcessorRef = useRef(null);
-  const [syncState, setSyncState] = useState({
-    state: 'idle',
-    progress: 0,
-    details: '',
-    errors: [],
-    processedMessages: 0,
-    totalMessages: 0
-  });
+  const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
   const [syncRetryCount, setSyncRetryCount] = useState(0);
-  const maxSyncRetries = 3;
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSyncs, setPendingSyncs] = useState(new Set());
+
+  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const messageCache = useRef(new Map());
+  const isMounted = useRef(true);
+  const batchProcessorRef = useRef(null);
   const offlineTimeoutRef = useRef(null);
   const lastSyncRef = useRef(null);
   const syncTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    if (!currentUser) {
-      logger.warn('[ChatView] No user found, redirecting to login');
-      navigate('/login');
-      return;
-    }
+  const { socket, isConnected } = useSocketConnection('whatsapp');
 
-    const loadMessages = async () => {
+  const PAGE_SIZE = 30;
+  const maxSyncRetries = 3;
+
+  // Define scrollToBottom function
+  const scrollToBottom = useCallback(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, []);
+
+  // 1. First define updateSyncState
+  const updateSyncState = useCallback((newState) => {
+    setSyncState(prev => ({
+      ...prev,
+      ...newState,
+      timestamp: Date.now()
+    }));
+  }, []);
+
+  // 2. Then define markMessagesAsRead
+  const markMessagesAsRead = useCallback(
+    debounce(async (messageIds) => {
+      if (!selectedContact?.id || messageIds.length === 0) return;
+
       try {
-        setLoading(true);
-        setError(null);
+        await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages/read`, {
+          messageIds: Array.from(messageIds)
+        });
         
-        // Message loading logic here
+        setUnreadMessageIds(new Set());
         
-        setLoading(false);
-      } catch (err) {
-        logger.info('[ChatView] Error loading messages:', err);
-        setError(err.message);
-        setLoading(false);
+        if (socket && isConnected) {
+          socket.emit('whatsapp:messages_read', {
+            contactId: selectedContact.whatsapp_id
+          });
+        }
+      } catch (error) {
+        console.error('Error marking messages as read:', error);
       }
-    };
+    }, 1000),
+    [selectedContact, socket, isConnected]
+  );
 
-    loadMessages();
-  }, [currentUser, navigate]);
-
-  // Process message queue - Define this before using it in useEffect
+  // 3. Then define processMessageQueue
   const processMessageQueue = useCallback(async () => {
-    if (!selectedContact?.id) {
-      console.log('[ChatView] Skipping message queue - no contact selected');
+    if (!selectedContact?.id || !socket || !isConnected || messageQueue.length === 0) {
       return;
     }
-
-    if (!socket || !isConnected) {
-      console.log('[ChatView] Skipping message queue - socket not ready:', {
-        hasSocket: !!socket,
-        isConnected
-      });
-      return;
-    }
-
-    if (messageQueue.length === 0) {
-      console.log('[ChatView] Message queue is empty');
-      return;
-    }
-
-    console.log('[ChatView] Processing message queue:', {
-      contactId: selectedContact.id,
-      queueLength: messageQueue.length
-    });
-
     const queue = [...messageQueue];
     setMessageQueue([]);
-
     for (const queuedMessage of queue) {
       try {
         const response = await api.post(
@@ -126,7 +207,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           throw new Error(response.data.message || 'Failed to send message');
         }
       } catch (error) {
-        console.error('[ChatView] Failed to send queued message:', error);
+        logger.error('[ChatView] Failed to send queued message:', error);
         setMessageQueue(prev => [...prev, queuedMessage]);
         toast.error('Some messages failed to send');
         break;
@@ -134,64 +215,322 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   }, [socket, isConnected, selectedContact, messageQueue]);
 
-  // Consolidated socket management
+  // 4. Then define updateConnectionStatus
+  const updateConnectionStatus = useCallback((status) => {
+    setConnectionStatus(status);
+    if (status === 'connected' && messageQueue.length > 0) {
+      processMessageQueue();
+    }
+  }, [messageQueue, processMessageQueue]);
+
+  // Update socket event handlers with token validation and refresh
   useEffect(() => {
-    if (!socket) {
-        console.log('[ChatView] No socket connection');
-        setConnectionStatus('disconnected');
-        return;
+    const handlers = {
+      message: (message) => {
+        if (!socket || !isOnline || !currentUser) {
+          messageCache.current.set(message.message_id, message);
+          return;
+        }
+
+        if (message.contact_id === selectedContact?.id) {
+          batchProcessorRef.current?.addMessage(message);
+          if (message.sender_id !== currentUser?.id) {
+            try {
+              markMessagesAsRead([message.message_id]);
+            } catch (error) {
+              logger.error('[ChatView] Error marking new message as read:', error);
+            }
+          }
+        }
+      },
+
+      syncProgress: (data) => {
+        if (!currentUser) return;
+        
+        if (data.contactId === selectedContact?.id) {
+          logger.info('[ChatView] Sync progress:', data);
+          if (data.messages?.length > 0) {
+            batchProcessorRef.current?.addMessage(...data.messages);
+          }
+          updateSyncState({
+            state: SYNC_STATES.APPROVED,
+            progress: data.progress || 0,
+            details: data.details || SYNC_STATUS_MESSAGES[SYNC_STATES.APPROVED],
+            processedMessages: data.processedMessages || 0,
+            totalMessages: data.totalMessages || 0
+          });
+        }
+      },
+
+      syncState: (data) => {
+        if (!currentUser) return;
+        
+        if (data.contactId === selectedContact?.id) {
+          logger.info('[ChatView] Sync state update:', data);
+          
+          let newState;
+          switch (data.state) {
+            case 'pending':
+              newState = SYNC_STATES.PENDING;
+              break;
+            case 'approved':
+              newState = SYNC_STATES.APPROVED;
+              break;
+            case 'rejected':
+              newState = SYNC_STATES.REJECTED;
+              break;
+            default:
+              logger.warn('[ChatView] Unknown sync state:', data.state);
+              return;
+          }
+
+          updateSyncState({
+            state: newState,
+            details: SYNC_STATUS_MESSAGES[newState],
+            errors: data.error ? [...syncState.errors, {
+              message: data.error,
+              timestamp: Date.now()
+            }] : syncState.errors
+          });
+
+          if (newState === SYNC_STATES.REJECTED && data.errorType === 'AUTH_ERROR') {
+            toast.error('Authentication failed. Please log in again.');
+            // Trigger token refresh
+            supabase.auth.refreshSession().then(async ({ data: { session } }) => {
+              if (session) {
+                // Update socket auth
+                if (socket) {
+                  socket.auth.token = session.access_token;
+                  socket.disconnect().connect();
+                }
+                // Update API token
+                await api.getAuthState();
+              }
+            });
+          }
+        }
+      },
+
+      error: (error) => {
+        logger.error('[ChatView] Socket error:', error);
+        if (error.type === 'UnauthorizedError' || error.message?.includes('unauthorized')) {
+          // Trigger token refresh and reconnect
+          supabase.auth.refreshSession().then(async ({ data: { session } }) => {
+            if (session) {
+              if (socket) {
+                socket.auth.token = session.access_token;
+                socket.disconnect().connect();
+              }
+              await api.getAuthState();
+            }
+          });
+        }
+        toast.error('Connection error. Messages might be delayed.');
+      },
+
+      connect: () => {
+        updateConnectionStatus('connected');
+      },
+
+      disconnect: () => {
+        updateConnectionStatus('disconnected');
+      }
+    };
+
+    // Set initial connection status
+    updateConnectionStatus(socket?.connected ? 'connected' : 'disconnected');
+
+    // Register all event handlers if socket exists and user is authenticated
+    if (socket && currentUser) {
+      socket.on('whatsapp:message', handlers.message);
+      socket.on('whatsapp:sync_progress', handlers.syncProgress);
+      socket.on('whatsapp:sync_state', handlers.syncState);
+      socket.on('error', handlers.error);
+      socket.on('connect', handlers.connect);
+      socket.on('disconnect', handlers.disconnect);
     }
 
-    console.log('[ChatView] Setting up socket connection');
-    
-    const handlers = {
-        connect: () => {
-            console.log('[ChatView] Socket connected');
-            setConnectionStatus('connected');
-            if (messageQueue.length > 0) {
-                processMessageQueue();
-            }
-        },
-        disconnect: () => {
-            console.log('[ChatView] Socket disconnected');
-            setConnectionStatus('disconnected');
-        },
-        connect_error: (error) => {
-            console.error('[ChatView] Socket connection error:', error);
-            setConnectionStatus('error');
-        },
-        'whatsapp:sync_completed': (data) => {
-            if (data.contactId === selectedContact?.id) {
-                console.log('[ChatView] Sync completed, refreshing messages');
-                fetchData(0);
-                toast.success('Messages synchronized successfully');
-            }
-        },
-        'whatsapp:sync_failed': (data) => {
-            if (data.contactId === selectedContact?.id) {
-                console.error('[ChatView] Sync failed:', data.error);
-                setSyncStatus('error');
-                toast.error('Message sync failed: ' + data.error);
-            }
-        }
+    // Always return cleanup function
+    return () => {
+      if (socket) {
+        socket.off('whatsapp:message', handlers.message);
+        socket.off('whatsapp:sync_progress', handlers.syncProgress);
+        socket.off('whatsapp:sync_state', handlers.syncState);
+        socket.off('error', handlers.error);
+        socket.off('connect', handlers.connect);
+        socket.off('disconnect', handlers.disconnect);
+      }
     };
+  }, [
+    socket,
+    selectedContact,
+    currentUser,
+    markMessagesAsRead,
+    isOnline,
+    updateSyncState,
+    syncState.errors,
+    updateConnectionStatus
+  ]);
 
-    // Register all handlers
-    Object.entries(handlers).forEach(([event, handler]) => {
-        socket.on(event, handler);
+  // Reset state when contact changes
+  useEffect(() => {
+    let mounted = true;
+
+    if (selectedContact?.id) {
+      // Reset states
+      setMessages([]);
+      setLoading(true);
+      setError(null);
+      setHasMoreMessages(true);
+      setPage(0);
+      
+      // Reset sync state
+      updateSyncState({
+        state: SYNC_STATES.PENDING,
+        progress: 0,
+        details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING]
+      });
+
+      // Initial data fetch
+      fetchData(0);
+    }
+
+    return () => {
+      mounted = false;
+      // Cleanup
+      if (socket) {
+        socket.off('sync:progress');
+        socket.off('sync:complete');
+        socket.off('sync:error');
+      }
+    };
+  }, [selectedContact?.id, updateSyncState]);
+
+  // Handle sync errors
+  const handleSyncError = useCallback((error) => {
+    const errorMessage = error?.response?.data?.message || error?.message || 'An unknown error occurred';
+    
+    updateSyncState({
+      state: SYNC_STATES.REJECTED,
+      errors: [...syncState.errors, {
+        message: errorMessage,
+        timestamp: Date.now()
+      }]
     });
 
-    // Set initial status
-    setConnectionStatus(socket.connected ? 'connected' : 'disconnected');
+    setError(`Message sync failed: ${errorMessage}`);
+    
+    console.error('[ChatView] Sync error:', {
+      contactId: selectedContact?.id,
+      error: errorMessage,
+      timestamp: new Date().toISOString()
+    });
+  }, [selectedContact?.id, syncState.errors, updateSyncState]);
 
-    // Cleanup
-    return () => {
-        console.log('[ChatView] Cleaning up socket handlers');
-        Object.entries(handlers).forEach(([event, handler]) => {
-            socket.off(event, handler);
+  // Process message queue only when we have a valid contact
+  useEffect(() => {
+    if (!socket || !isConnected) {
+      console.log('Socket not ready for message queue', { hasSocket: !!socket, isConnected });
+      return;
+    }
+
+    if (!selectedContact?.id) {
+      console.log('No contact selected for message queue');
+      return;
+    }
+
+    if (messageQueue.length === 0) {
+      console.log('Message queue is empty');
+      return;
+    }
+
+    console.log('Processing message queue:', {
+      contactId: selectedContact.id,
+      queueLength: messageQueue.length
+    });
+    processMessageQueue();
+  }, [socket, isConnected, selectedContact, messageQueue, processMessageQueue]);
+
+  // Update fetchData to use api utility
+  const fetchData = async (page = 0) => {
+    if (!selectedContact?.id) return;
+
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await api.get(`/api/whatsapp-entities/messages/${selectedContact.id}?page=${page}`);
+      
+      if (page === 0) {
+        setMessages(response.data.messages);
+      } else {
+        setMessages(prev => [...prev, ...response.data.messages]);
+      }
+      
+      setHasMoreMessages(response.data.hasMore);
+      setPage(page);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        // Start sync process with correct state
+        updateSyncState({
+          state: SYNC_STATES.PENDING,
+          progress: 0,
+          details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING]
         });
+        
+        try {
+          await api.post(`/api/whatsapp-entities/sync/${selectedContact.id}`);
+        } catch (syncErr) {
+          handleSyncError(syncErr);
+        }
+      } else {
+        handleSyncError(err);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Early return component
+  const renderEmptyState = () => {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
+        <p>Select a contact to start chatting</p>
+      </div>
+    );
+  };
+
+  // Handle online/offline events with memoized handlers
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (selectedContact && pendingSyncs.size > 0) {
+        logger.info('[ChatView] Back online, retrying pending syncs:', Array.from(pendingSyncs));
+        pendingSyncs.forEach(contactId => {
+          if (contactId === selectedContact.id) {
+            logger.info('[ChatView] Back online, retrying pending sync:', contactId);
+            fetchData(0);
+          }
+        });
+        setPendingSyncs(new Set());
+      }
     };
-  }, [socket, selectedContact?.id]); // Minimal dependencies
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      if (offlineTimeoutRef.current) {
+        clearTimeout(offlineTimeoutRef.current);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOffline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [selectedContact?.id]);
 
   // Render messages from messagePages
   const currentMessages = useMemo(() => {
@@ -220,176 +559,40 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     if (!selectedContact?.id) return;
 
     try {
-      console.log('[ChatView] Initiating sync for contact:', selectedContact.id);
+      logger.info('[ChatView] Initiating sync for contact:', selectedContact.id);
       const response = await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/sync`);
       
-      if (response.data?.data?.status === 'syncing') {
-        setSyncStatus('syncing');
+      if (response.data?.data?.status === 'approved') {
+        updateSyncState({
+          state: SYNC_STATES.APPROVED,
+          progress: 0,
+          details: SYNC_STATUS_MESSAGES[SYNC_STATES.APPROVED]
+        });
+        
         toast.custom((t) => (
           <div className="bg-[#24283b] text-white px-4 py-2 rounded-lg shadow-lg">
             Starting message sync...
           </div>
         ), { duration: 3000 });
+      } else if (response.data?.data?.status === 'pending') {
+        updateSyncState({
+          state: SYNC_STATES.PENDING,
+          progress: 0,
+          details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING]
+        });
       }
     } catch (error) {
-      console.error('[ChatView] Error initiating sync:', error);
+      logger.error('[ChatView] Error initiating sync:', error);
+      updateSyncState({
+        state: SYNC_STATES.REJECTED,
+        errors: [...syncState.errors, {
+          message: error.response?.data?.message || 'Failed to start message sync',
+          timestamp: Date.now()
+        }]
+      });
       toast.error('Failed to start message sync');
     }
-  }, [selectedContact]);
-
-  const fetchData = useCallback(async (pageIndex = 0) => {
-    if (!selectedContact?.id) {
-      console.log('[ChatView] No contact selected, skipping fetch');
-      return;
-    }
-
-    // Only show loading indicator for initial load when no messages exist
-    if (pageIndex === 0 && messages.length === 0) {
-    setLoading(true);
-    } else {
-      setIsLoadingMore(true);
-    }
-    setError(null);
-
-    try {
-      // First check WhatsApp connection status
-      console.log('[ChatView] Checking WhatsApp status before fetching messages');
-      const statusResponse = await api.get('/matrix/whatsapp/status');
-      console.log('[ChatView] WhatsApp status response:', statusResponse.data);
-
-      if (!statusResponse.data?.status || statusResponse.data.status === 'error') {
-        throw new Error('WhatsApp is not connected');
-      }
-
-      // Continue with message fetch if connection is ready
-      console.log('[ChatView] Fetching messages:', {
-        contactId: selectedContact.id,
-        page: pageIndex,
-        pageSize: PAGE_SIZE
-      });
-
-      const response = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages`, {
-        params: {
-          page: pageIndex,
-          pageSize: PAGE_SIZE
-        },
-        timeout: 30000
-      });
-
-      if (!isMounted.current) return;
-
-      console.log('[ChatView] Message response:', response.data);
-
-      if (!response.data?.data) {
-        throw new Error('Invalid response format from server');
-      }
-
-      const { messages: responseMessages, status, total, sync_info } = response.data.data;
-
-      console.log('[ChatView] Processing message response:', {
-        status,
-        messageCount: responseMessages?.length,
-        total,
-        sync_info
-      });
-
-      // Handle different sync states
-      switch (status) {
-        case 'syncing':
-          setSyncStatus('syncing');
-          toast.loading('Syncing messages...', { id: 'sync-status' });
-          // Keep existing messages while syncing
-          break;
-
-        case 'pending_user_join':
-          setSyncStatus('pending_user_join');
-          toast.error('Please join the WhatsApp room first');
-          break;
-
-        case 'error':
-          setSyncStatus('error');
-          throw new Error(sync_info?.error || 'Failed to fetch messages');
-
-        case 'success':
-        case 'idle':
-          setSyncStatus(status);
-          toast.dismiss('sync-status');
-          
-          if (Array.isArray(responseMessages)) {
-            setMessagePages(prevPages => {
-              const newPages = new Map(prevPages);
-              newPages.set(pageIndex, responseMessages);
-              return newPages;
-            });
-            setTotalMessages(total || responseMessages.length);
-          }
-          break;
-
-        default:
-          console.warn('[ChatView] Unknown sync status:', status);
-          setSyncStatus('idle');
-          // If no status but we have messages, still display them
-          if (Array.isArray(responseMessages)) {
-            setMessagePages(prevPages => {
-              const newPages = new Map(prevPages);
-              newPages.set(pageIndex, responseMessages);
-              return newPages;
-            });
-            setTotalMessages(total || responseMessages.length);
-          }
-      }
-
-      // If no messages and not already syncing, initiate sync
-      if ((!responseMessages || responseMessages.length === 0) && status !== 'syncing') {
-        console.log('[ChatView] No messages found, initiating sync');
-        await initiateSync();
-      }
-
-    } catch (error) {
-      console.error('[ChatView] Error in fetchData:', error);
-      if (isMounted.current) {
-        setError(error.message || 'Failed to load messages');
-        setSyncStatus('error');
-        toast.error(error.message || 'Failed to load messages');
-      }
-    } finally {
-      if (isMounted.current) {
-        if (pageIndex === 0) {
-      setLoading(false);
-        } else {
-          setIsLoadingMore(false);
-        }
-      }
-    }
-  }, [selectedContact, initiateSync, messages.length]);
-
-  // Keep only this effect for handling contact selection and message fetching
-  useEffect(() => {
-    if (selectedContact?.id) {
-      console.log('[ChatView] Selected contact changed:', {
-        contactId: selectedContact.id,
-        whatsappId: selectedContact.whatsapp_id
-      });
-
-      // Reset message-related state
-      setMessagePages(new Map());
-      setMessages([]);
-      setPage(1);
-      setHasMoreMessages(true);
-      setError(null);
-      setSyncStatus('loading');
-      setPriority(selectedContact.priority || null);
-      
-      // Fetch initial messages
-      fetchData(0).catch(error => {
-        console.error('[ChatView] Error fetching initial messages:', error);
-        if (isMounted.current) {
-          setError('Failed to load messages');
-          setSyncStatus('error');
-        }
-      });
-    }
-  }, [selectedContact, fetchData]);
+  }, [selectedContact?.id, updateSyncState, syncState.errors]);
 
   // Update messages whenever messagePages changes
   useEffect(() => {
@@ -420,50 +623,21 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     };
   }, []);
 
-  // Add infinite scroll handler
-  const handleScroll = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container || loading || !hasMoreMessages || isLoadingMore) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    
-    // Load more when user scrolls to top (for older messages)
-    if (scrollTop === 0) {
-      console.log('[ChatView] Scrolled to top, loading more messages');
-      setPage(prev => {
-        const nextPage = prev + 1;
-        fetchData(nextPage).catch(error => {
-          console.error('[ChatView] Error loading more messages:', error);
-        });
-        return nextPage;
-      });
-    }
-  }, [loading, hasMoreMessages, isLoadingMore, fetchData]);
-
-  // Add this function to mark messages as read
-  const markMessagesAsRead = useCallback(
-    debounce(async (messageIds) => {
-      if (!selectedContact?.id || messageIds.length === 0) return;
-
-      try {
-        await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages/read`, {
-          messageIds: Array.from(messageIds)
-        });
-        
-        // Clear the unread messages set after successful marking
-        setUnreadMessageIds(new Set());
-        
-        // Emit socket event to update contact list
-        if (socket && isConnected) {
-          socket.emit('whatsapp:messages_read', {
-            contactId: selectedContact.whatsapp_id
-          });
-        }
-      } catch (error) {
-        console.error('Error marking messages as read:', error);
+  // Handle scroll for infinite loading
+  const handleScroll = useCallback(
+    debounce((e) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.target;
+      
+      if (
+        scrollHeight - scrollTop <= clientHeight * 1.5 &&
+        hasMoreMessages &&
+        !loading &&
+        syncState.state !== SYNC_STATES.SYNCING
+      ) {
+        fetchData(page + 1);
       }
-    }, 1000),
-    [selectedContact, socket, isConnected]
+    }, 100),
+    [hasMoreMessages, loading, page, syncState.state]
   );
 
   // Media preview handler
@@ -642,89 +816,12 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     };
   }, []);
 
-  // Update socket event handlers to use batch processor
+  // Update scroll position with memoized handler
   useEffect(() => {
-    if (socket) {
-      const handleNewMessage = (message) => {
-        console.log('[ChatView] New message received:', message);
-        if (message.contact_id === selectedContact?.id) {
-          batchProcessorRef.current.addMessage(message);
-          
-          // Mark new message as read if it's not from current user
-          if (message.sender_id !== currentUser?.id) {
-          try {
-              markMessagesAsRead([message.message_id]);
-          } catch (error) {
-              console.error('[ChatView] Error marking new message as read:', error);
-            }
-          }
-        }
-      };
-
-      const handleSyncProgress = (data) => {
-        if (data.contactId === selectedContact?.id) {
-          console.log('[ChatView] Sync progress:', data);
-          if (data.messages && data.messages.length > 0) {
-            batchProcessorRef.current.addMessage(...data.messages);
-          }
-          setSyncState(prev => ({
-            ...prev,
-            progress: data.progress,
-            processedMessages: data.processedMessages || prev.processedMessages,
-            errors: data.errors || prev.errors
-          }));
-        }
-      };
-
-      const handleSyncState = (data) => {
-        if (data.contactId === selectedContact?.id) {
-          console.log('[ChatView] Sync state update:', data);
-          
-          // Handle retry states
-          if (data.state === 'RETRYING') {
-            setSyncRetryCount(prev => prev + 1);
-          } else if (data.state === 'COMPLETED' || data.state === 'ERROR') {
-            setSyncRetryCount(0);
-          }
-
-          setSyncState(prev => ({
-            ...prev,
-            ...data,
-            details: data.details || prev.details,
-            errors: data.errors || prev.errors
-          }));
-
-          // Handle fatal errors
-          if (data.state === 'ERROR' && data.errorType === 'AUTH_ERROR') {
-            toast.error('Authentication failed. Please log in again.');
-            // Trigger logout or auth refresh
-            return;
-          }
-        }
-      };
-
-      socket.on('whatsapp:message', handleNewMessage);
-      socket.on('whatsapp:sync_progress', handleSyncProgress);
-      socket.on('whatsapp:sync_state', handleSyncState);
-      socket.on('error', (error) => {
-        console.error('[ChatView] Socket error:', error);
-        toast.error('Connection error. Messages might be delayed.');
-      });
-      
-      return () => {
-        socket.off('whatsapp:message', handleNewMessage);
-        socket.off('whatsapp:sync_progress', handleSyncProgress);
-        socket.off('whatsapp:sync_state', handleSyncState);
-        socket.off('error');
-      };
+    if (currentMessages.length > 0) {
+      scrollToBottom();
     }
-  }, [socket, selectedContact, currentUser, markMessagesAsRead]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(scrollToBottom, [messages]);
+  }, [currentMessages, scrollToBottom]);
 
   // Add utility function for Matrix message type mapping
   const getMessageType = (message) => {
@@ -855,30 +952,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   };
 
-  // Process message queue only when we have a valid contact
-  useEffect(() => {
-    if (!socket || !isConnected) {
-      console.log('Socket not ready for message queue', { hasSocket: !!socket, isConnected });
-      return;
-    }
-
-    if (!selectedContact?.id) {
-      console.log('No contact selected for message queue');
-      return;
-    }
-
-    if (messageQueue.length === 0) {
-      console.log('Message queue is empty');
-      return;
-    }
-
-    console.log('Processing message queue:', {
-      contactId: selectedContact.id,
-      queueLength: messageQueue.length
-    });
-    processMessageQueue();
-  }, [socket, isConnected, selectedContact, messageQueue]);
-
   // Add effect to mark messages as read when they become visible
   useEffect(() => {
     if (unreadMessageIds.size > 0) {
@@ -971,316 +1044,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   };
 
-  // Update connection status when socket connects
-  useEffect(() => {
-    if (isConnected) {
-      setConnectionStatus('connected');
-    } else {
-      setConnectionStatus('connecting');
-    }
-  }, [isConnected]);
-
-  // Separate message fetching from socket connection
-  const fetchMessages = useCallback(async (pageIndex = 0) => {
-    if (!selectedContact?.id) return;
-
-    try {
-      // Only show loading for initial fetch
-      if (pageIndex === 0 && messages.length === 0) {
-        setLoading(true);
-      } else {
-        setIsLoadingMore(true);
-      }
-      setError(null);
-
-      // Check cache first for this page
-      const cacheKey = `${selectedContact.id}-${pageIndex}`;
-      const cachedData = messageCache.current.get(cacheKey);
-      const now = Date.now();
-      if (cachedData && now - cachedData.timestamp < 5 * 60 * 1000) { // 5 minute cache
-        setMessages(prev => pageIndex === 0 ? cachedData.messages : [...prev, ...cachedData.messages]);
-        setHasMoreMessages(cachedData.messages.length === PAGE_SIZE);
-        
-        // If cache is older than 1 minute, trigger background sync
-        if (now - cachedData.timestamp > 60 * 1000) {
-          backgroundSync();
-        }
-        return;
-      }
-
-      // If not in cache or cache expired, fetch from API
-      const response = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages`, {
-        params: {
-          page: pageIndex,
-          pageSize: PAGE_SIZE
-        },
-        timeout: 30000
-      });
-
-      if (!response.data?.data) {
-        throw new Error('Invalid response format from server');
-      }
-
-      const { messages: responseMessages, status, total, sync_info } = response.data.data;
-
-      // Handle different sync states
-      switch (status) {
-        case 'syncing':
-          setSyncStatus('syncing');
-          toast.loading('Syncing messages...', { id: 'sync-status' });
-          break;
-
-        case 'pending_user_join':
-          setSyncStatus('pending_user_join');
-          toast.error('Please join the WhatsApp room first');
-          break;
-
-        case 'error':
-          setSyncStatus('error');
-          throw new Error(sync_info?.error || 'Failed to fetch messages');
-
-        case 'success':
-        case 'idle':
-          setSyncStatus(status);
-          toast.dismiss('sync-status');
-          
-          if (Array.isArray(responseMessages)) {
-            // Update cache
-            messageCache.current.set(cacheKey, {
-              messages: responseMessages,
-              timestamp: now
-            });
-
-            setMessages(prev => pageIndex === 0 ? responseMessages : [...prev, ...responseMessages]);
-            setHasMoreMessages(responseMessages.length === PAGE_SIZE);
-            setTotalMessages(total || responseMessages.length);
-          }
-          break;
-
-        default:
-          console.warn('[ChatView] Unknown sync status:', status);
-          setSyncStatus('idle');
-          if (Array.isArray(responseMessages)) {
-            messageCache.current.set(cacheKey, {
-              messages: responseMessages,
-              timestamp: now
-            });
-            setMessages(prev => pageIndex === 0 ? responseMessages : [...prev, ...responseMessages]);
-            setHasMoreMessages(responseMessages.length === PAGE_SIZE);
-          }
-      }
-
-      // If no messages and not syncing, trigger background sync
-      if ((!responseMessages || responseMessages.length === 0) && status !== 'syncing') {
-        backgroundSync();
-      }
-
-    } catch (error) {
-      console.error('[ChatView] Error fetching messages:', error);
-      setError(error.message);
-      setSyncStatus('error');
-      toast.error(error.message || 'Failed to load messages');
-      
-      // Queue for retry if network error
-      if (!navigator.onLine || error.message.includes('network') || error.message.includes('timeout')) {
-        setPendingSyncs(prev => new Set([...prev, selectedContact.id]));
-        // Set a timeout to retry if we're offline for too long
-        if (syncTimeoutRef.current) {
-          clearTimeout(syncTimeoutRef.current);
-        }
-        syncTimeoutRef.current = setTimeout(() => {
-          if (navigator.onLine) {
-            fetchMessages(0);
-          }
-        }, 30000); // Retry after 30 seconds
-      }
-    } finally {
-      if (pageIndex === 0) {
-        setLoading(false);
-      } else {
-        setIsLoadingMore(false);
-      }
-    }
-  }, [selectedContact?.id, messages.length, PAGE_SIZE]);
-
-  const backgroundSync = async () => {
-    if (syncStatus === 'syncing' || !selectedContact?.id) return;
-    
-    try {
-      setSyncStatus('syncing');
-      const syncResponse = await api.post('/api/matrix/whatsapp/sync', {
-        contactId: selectedContact.id
-      });
-      
-      // Wait for sync to complete (up to 10 seconds)
-      let attempts = 0;
-      const maxAttempts = 10;
-      
-      while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const checkResponse = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages`, {
-          params: { page: 0, pageSize: PAGE_SIZE }
-        });
-        
-        const syncStatus = checkResponse.data?.data?.sync_info?.status;
-        if (syncStatus === 'approved' || syncStatus === 'rejected') {
-          // Clear cache to force fresh data
-          messageCache.current.clear();
-          // Refresh messages
-          await fetchMessages(0);
-          break;
-        }
-        attempts++;
-      }
-      
-      if (attempts >= maxAttempts) {
-        throw new Error('Sync timed out');
-      }
-      
-    } catch (error) {
-      console.error('[ChatView] Background sync failed:', error);
-      // Don't show error to user for background sync
-    } finally {
-      setSyncStatus('idle');
-    }
-  };
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
-      }
-      messageCache.current.clear();
-    };
-  }, []);
-
-  // Enhanced render function
-  const renderContent = () => {
-    if (loading && messages.length === 0) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full space-y-4">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-          <div className="text-gray-400">
-            {syncState.state === 'PROCESSING' ? (
-              <>
-                <div>Syncing messages from WhatsApp...</div>
-                <div className="text-sm mt-2">{syncState.details}</div>
-                <div className="w-64 h-2 bg-gray-200 rounded-full mt-2">
-                  <div 
-                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                    style={{ width: `${syncState.progress}%` }}
-                  ></div>
-                </div>
-                {syncState.processedMessages > 0 && (
-                  <div className="text-sm mt-2">
-                    {syncState.processedMessages} messages processed
-                  </div>
-                )}
-              </>
-            ) : syncState.state === 'RETRYING' ? (
-              <>
-                <div>{ERROR_MESSAGES[syncState.errors?.[0]?.type] || 'Retrying sync...'}</div>
-                <div className="text-sm mt-2">Attempt {syncRetryCount + 1} of {maxSyncRetries}</div>
-              </>
-            ) : syncState.state === 'PREPARING' ? (
-              'Preparing to sync messages...'
-            ) : syncState.state === 'FETCHING' ? (
-              'Fetching message history...'
-            ) : (
-              'Loading messages...'
-            )}
-          </div>
-          {syncState.errors?.length > 0 && syncState.state !== 'RETRYING' && (
-            <div className="text-red-400 text-sm mt-2">
-              {ERROR_MESSAGES[syncState.errors[syncState.errors.length - 1].type] || 
-               syncState.errors[syncState.errors.length - 1].error}
-            </div>
-          )}
-          {syncState.state === 'ERROR' && syncRetryCount >= maxSyncRetries && (
-            <button
-              onClick={() => {
-                setSyncRetryCount(0);
-                fetchMessages(0);
-              }}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors mt-4"
-            >
-              Try Again
-            </button>
-          )}
-        </div>
-      );
-    }
-
-    if (error) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full space-y-4">
-          <div className="text-gray-400 text-center">{error}</div>
-          <button
-            onClick={() => fetchMessages(0)}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      );
-    }
-
-    if (messages.length === 0) {
-      if (syncState.state === 'PROCESSING') {
-        return (
-          <div className="flex flex-col items-center justify-center h-full space-y-4">
-            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-            <div className="text-gray-400">Syncing messages from WhatsApp...</div>
-            <div className="text-sm text-gray-500">{syncState.details}</div>
-            <div className="w-64 h-2 bg-gray-200 rounded-full">
-              <div 
-                className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                style={{ width: `${syncState.progress}%` }}
-              ></div>
-            </div>
-            {syncState.processedMessages > 0 && (
-              <div className="text-sm text-gray-500">
-                {syncState.processedMessages} messages processed
-              </div>
-            )}
-          </div>
-        );
-      }
-      return (
-        <div className="flex flex-col items-center justify-center h-full space-y-4">
-          <div className="text-gray-400">No messages yet</div>
-          <button
-            onClick={() => fetchMessages(0)}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            Check for messages
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <>
-        {messages.map((message, index) => (
-          <div key={message.id || index}>
-            {renderMessageContent(message)}
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </>
-    );
-  };
-
-  // Show empty state when no contact is selected
-  if (!selectedContact) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
-        <p>Select a contact to start chatting</p>
-      </div>
-    );
-  }
-
   // Render header connection status
   const renderConnectionStatus = () => {
     if (!isOnline) {
@@ -1299,58 +1062,13 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     );
   };
 
-  // Handle online/offline events
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      // Retry pending syncs
-      if (pendingSyncs.size > 0) {
-        console.log('[ChatView] Back online, retrying pending syncs:', Array.from(pendingSyncs));
-        pendingSyncs.forEach(contactId => {
-          fetchMessages(0);
-        });
-        setPendingSyncs(new Set());
-      }
-    };
-
-    const handleOffline = () => {
-      setIsOnline(false);
-      // Clear any pending timeouts
-      if (offlineTimeoutRef.current) {
-        clearTimeout(offlineTimeoutRef.current);
-      }
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      if (offlineTimeoutRef.current) {
-        clearTimeout(offlineTimeoutRef.current);
-      }
-    };
-  }, [pendingSyncs, fetchMessages]);
-
-  // Update socket event handlers to handle offline state
-  useEffect(() => {
-    if (socket) {
-      const handleNewMessage = (message) => {
-        if (!isOnline) {
-          // Store message in IndexedDB for offline access
-          messageCache.current.set(message.message_id, message);
-          return;
-        }
-        // ... existing message handling ...
-      };
-
-      // ... rest of socket event handlers ...
-    }
-  }, [socket, selectedContact, currentUser, markMessagesAsRead, isOnline]);
+  // Render the component
+  if (!selectedContact) {
+    return renderEmptyState();
+  }
 
   return (
-    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full">
+    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full relative">
       {/* Chat Header - Fixed height */}
       <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
         <div className="flex items-center space-x-3">
@@ -1398,13 +1116,62 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         </div>
       </div>
 
+      {/* Sync Progress Indicator */}
+      <SyncProgressIndicator syncState={syncState} />
+
       {/* Messages Area - Scrollable */}
       <div 
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto p-4 space-y-4"
         onScroll={handleScroll}
       >
-        {renderContent()}
+        {loading && messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full space-y-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#1e6853]"></div>
+            <div className="text-gray-400">
+              {syncState.state === SYNC_STATES.SYNCING ? (
+                <>
+                  <div>Syncing messages from WhatsApp...</div>
+                  <div className="text-sm mt-2">{syncState.details}</div>
+                </>
+              ) : (
+                'Loading messages...'
+              )}
+            </div>
+              </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center h-full space-y-4">
+            <div className="text-red-400 text-center">{error}</div>
+              <button
+                onClick={() => {
+                setError(null);
+                  fetchData(0);
+                }}
+              className="px-4 py-2 bg-[#1e6853] text-white rounded hover:bg-[#1e6853]/90 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full space-y-4">
+            <div className="text-gray-400">No messages yet</div>
+            <button
+              onClick={() => fetchData(0)}
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+            >
+              Check for messages
+            </button>
+          </div>
+        ) : (
+          <>
+            {messages.map((message, index) => (
+              <div key={message.id || index}>
+                {renderMessageContent(message)}
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </>
+        )}
       </div>
 
       {/* Message Input - Fixed height */}
