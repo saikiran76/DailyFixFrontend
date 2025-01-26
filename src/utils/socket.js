@@ -7,6 +7,16 @@ import tokenService from '../services/tokenService';
 
 const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3001';
 
+// Socket connection states for better state management
+export const SOCKET_STATES = {
+  INITIAL: 'initial',
+  CONNECTING: 'connecting',
+  AUTHENTICATING: 'authenticating',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  ERROR: 'error'
+};
+
 const CONNECTION_CONFIG = {
   RECONNECTION_ATTEMPTS: 3,
   RECONNECTION_DELAY: 2000,
@@ -19,13 +29,18 @@ let connectionPromise = null;
 let messageHandler = null;
 let connectionAttemptInProgress = false;
 
+// Enhanced socket state tracking
 let socketState = {
+  state: SOCKET_STATES.INITIAL,
   authenticated: false,
   connecting: false,
   connectionStart: Date.now(),
   lastActivity: Date.now(),
   pendingOperations: new Set(),
-  roomSubscriptions: new Set()
+  roomSubscriptions: new Set(),
+  error: null,
+  retryCount: 0,
+  lastHeartbeat: Date.now()
 };
 
 // Discord message handling
@@ -87,8 +102,8 @@ export const initializeSocket = async (options = {}) => {
           try {
             tokens = await tokenService.getValidToken();
             logger.info('---tokens----', tokens)
-            if (!tokens?.access_token) {
-              throw new Error('No valid token available');
+        if (!tokens?.access_token) {
+          throw new Error('No valid token available');
             }
           } catch (error) {
             retryCount++;
@@ -122,10 +137,10 @@ export const initializeSocket = async (options = {}) => {
         // Subscribe to token updates with error handling
         const unsubscribe = tokenService.subscribe(async (newTokens) => {
           try {
-            if (socketInstance?.connected) {
-              logger.info('Updating socket authentication with new token');
-              socketInstance.auth.token = newTokens.access_token;
-              socketInstance.auth.userId = newTokens.userId;
+          if (socketInstance?.connected) {
+            logger.info('Updating socket authentication with new token');
+            socketInstance.auth.token = newTokens.access_token;
+            socketInstance.auth.userId = newTokens.userId;
             }
           } catch (error) {
             logger.error('Error updating socket token:', error);
@@ -234,19 +249,19 @@ const handleReconnect = async (socket, options = {}) => {
     const tokens = await handleTokenRefresh(socket);
     
     if (socket) {
-      socket.auth.token = tokens.access_token;
-      socket.auth.userId = tokens.userId;
-      
-      // Update socket state before reconnect
-      socketState.lastTokenRefresh = Date.now();
-      socketState.authenticated = false;
-      
-      socket.connect();
+    socket.auth.token = tokens.access_token;
+    socket.auth.userId = tokens.userId;
+    
+    // Update socket state before reconnect
+    socketState.lastTokenRefresh = Date.now();
+    socketState.authenticated = false;
+    
+    socket.connect();
 
-      logger.info('Reconnection initiated with fresh tokens', {
-        userId: tokens.userId,
-        tokenRefreshTime: socketState.lastTokenRefresh
-      });
+    logger.info('Reconnection initiated with fresh tokens', {
+      userId: tokens.userId,
+      tokenRefreshTime: socketState.lastTokenRefresh
+    });
     }
   } catch (error) {
     logger.error('Reconnection failed after token refresh attempts:', error);
@@ -439,6 +454,7 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
     logger.info('Socket authenticated:', data);
     socketState.authenticated = true;
     socketState.lastActivity = Date.now();
+    socketState.connecting = false;
     reconnectAttempts = 0; // Reset counter on successful auth
     
     // Update metrics
@@ -498,8 +514,12 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
 
   socket.on('connect', () => {
     clearTimeouts();
+    socketState.state = SOCKET_STATES.AUTHENTICATING;
     socketState.connectionStart = Date.now();
     socketState.lastActivity = Date.now();
+    if (options.onStateChange) {
+      options.onStateChange(socketState);
+    }
     resolve(socket);
   });
 
@@ -507,13 +527,194 @@ const setupSocketListeners = (socket, options, resolve, reject) => {
   setupConnectionTimeout();
 };
 
-const socketManager = {
-  connect: initializeSocket,
-  disconnect: disconnectSocket,
-  getSocket,
-  checkHealth: checkSocketHealth,
-  subscribeToDiscordMessages,
-  unsubscribeFromDiscordMessages
-};
+// Enhanced socket manager with proper state synchronization
+class SocketManager {
+  constructor() {
+    // Direct reference to socketState instead of copying
+    this.state = socketState;
+    this.socket = null;
+    this.connectionPromise = null;
+    this.eventHandlers = new Map();
+    this.stateChangeListeners = new Set();
+    this.connectionTimeout = null;
+    this.heartbeatTimeout = null;
+  }
+
+  // State management
+  updateState(updates) {
+    Object.assign(this.state, updates);
+    // Notify listeners of state change
+    this.stateChangeListeners.forEach(listener => listener(this.state));
+  }
+
+  onStateChange(listener) {
+    this.stateChangeListeners.add(listener);
+    return () => this.stateChangeListeners.delete(listener);
+  }
+
+  // Enhanced socket readiness check
+  isReady() {
+    return this.socket?.connected && this.state.authenticated && 
+           this.state.state === SOCKET_STATES.CONNECTED;
+  }
+
+  // Enhanced emit with connection waiting
+  async emit(event, data, options = {}) {
+      if (!this.isReady()) {
+      if (options.waitForConnection) {
+        await this.waitForConnection(options.timeout);
+      } else {
+        throw new Error('Socket not ready for operations');
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Event emission timeout'));
+      }, options.timeout || 5000);
+
+      this.socket.emit(event, data, (response) => {
+        clearTimeout(timeout);
+        if (response?.error) {
+          reject(new Error(response.error));
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  // Enhanced event subscription
+  on(event, handler) {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event).add(handler);
+
+    if (this.socket) {
+      this.socket.on(event, handler);
+    }
+
+    return () => this.off(event, handler);
+  }
+
+  // Enhanced event unsubscription
+  off(event, handler) {
+    if (this.socket) {
+      this.socket.off(event, handler);
+    }
+    
+    const handlers = this.eventHandlers.get(event);
+    if (handlers) {
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        this.eventHandlers.delete(event);
+      }
+    }
+  }
+
+  // Reattach event handlers after reconnection
+  reattachEventHandlers(socket) {
+    for (const [event, handlers] of this.eventHandlers) {
+      for (const handler of handlers) {
+        socket.on(event, handler);
+      }
+    }
+  }
+
+  // Enhanced connection with proper state transitions
+  async connect(options = {}) {
+    if (this.connectionPromise) {
+      return this.connectionPromise;
+    }
+
+    this.updateState({
+      state: SOCKET_STATES.CONNECTING,
+      error: null,
+      retryCount: 0,
+      connecting: true
+    });
+
+    try {
+      const socket = await initializeSocket({
+        ...options,
+        onStateChange: (newState) => this.updateState(newState)
+      });
+      
+      this.socket = socket;
+      this.reattachEventHandlers(socket);
+
+      return socket;
+    } catch (error) {
+      this.updateState({
+        state: SOCKET_STATES.ERROR,
+        error,
+        connecting: false
+      });
+      throw error;
+    }
+  }
+
+  // Wait for connection to be ready
+  waitForConnection(timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      if (this.isReady()) {
+        resolve();
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Connection timeout'));
+      }, timeout);
+
+      const onStateChange = (state) => {
+        if (this.isReady()) {
+          cleanup();
+          resolve();
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.stateChangeListeners.delete(onStateChange);
+      };
+
+      this.stateChangeListeners.add(onStateChange);
+    });
+  }
+
+  // Enhanced health check
+  checkHealth() {
+    return {
+      state: this.state.state,
+      connected: this.socket?.connected || false,
+      authenticated: this.state.authenticated,
+      lastActivity: this.state.lastActivity,
+      lastHeartbeat: this.state.lastHeartbeat,
+      pendingOperations: this.state.pendingOperations.size,
+      roomSubscriptions: Array.from(this.state.roomSubscriptions),
+      error: this.state.error,
+      retryCount: this.state.retryCount,
+      uptime: this.state.connectionStart ? Date.now() - this.state.connectionStart : 0
+    };
+  }
+
+  // Enhanced disconnect
+  async disconnect() {
+    this.updateState({
+      state: SOCKET_STATES.DISCONNECTED,
+      authenticated: false,
+      connecting: false
+    });
+    
+    await cleanupSocket();
+    this.socket = null;
+    this.connectionPromise = null;
+  }
+}
+
+// Create singleton instance
+const socketManager = new SocketManager();
 
 export default socketManager; 

@@ -3,19 +3,93 @@ import { tokenManager } from '../utils/tokenManager';
 import api from '../utils/api';
 import logger from '../utils/logger';
 import { debounce } from 'lodash';
+import { executeAtomically } from '../utils/atomicOperations';
+
+// State configuration with metadata and hooks
+const STATE_CONFIG = {
+  'initial': {
+    allowedTransitions: ['whatsapp', 'matrix'],
+    validationRules: [],
+    onEnter: async () => {
+      logger.info('[OnboardingService] Entering initial state');
+    },
+    onExit: async () => {
+      logger.info('[OnboardingService] Exiting initial state');
+    }
+  },
+  'whatsapp': {
+    allowedTransitions: ['matrix', 'complete'],
+    validationRules: ['validateWhatsAppConnection'],
+    onEnter: async () => {
+      logger.info('[OnboardingService] Entering WhatsApp setup');
+    },
+    onExit: async (context) => {
+      logger.info('[OnboardingService] Exiting WhatsApp setup');
+      await context.validateWhatsAppConnection();
+    }
+  },
+  'matrix': {
+    allowedTransitions: ['whatsapp', 'complete'],
+    validationRules: ['validateMatrixConnection'],
+    onEnter: async () => {
+      logger.info('[OnboardingService] Entering Matrix setup');
+    },
+    onExit: async (context) => {
+      logger.info('[OnboardingService] Exiting Matrix setup');
+      await context.validateMatrixConnection();
+    }
+  },
+  'complete': {
+    allowedTransitions: [],
+    validationRules: ['validateAllConnections'],
+    onEnter: async (context) => {
+      logger.info('[OnboardingService] Completing onboarding');
+      await context.validateAllConnections();
+    },
+    onExit: () => {
+      throw new Error('Cannot transition from complete state');
+    }
+  }
+};
 
 class OnboardingService {
   constructor() {
     this.cache = new Map();
     this.pendingChecks = new Map();
     this.updateLocks = new Map();
+    this.transitionLocks = new Map();
     this.CACHE_TTL = 30000; // 30 seconds
+    this.MAX_RETRIES = 3;
+    this.RETRY_DELAY = 1000;
     
     // Debounced status check
     this.debouncedCheckStatus = debounce(this._checkStatus.bind(this), 100, {
       leading: true,
       trailing: true
     });
+
+    // Add validation rules
+    this.validationRules = {
+      validateWhatsAppConnection: async () => {
+        const status = await this._checkStatus();
+        if (!status.whatsappConnected) {
+          throw new Error('WhatsApp connection required');
+        }
+      },
+      validateMatrixConnection: async () => {
+        const status = await this._checkStatus();
+        if (!status.matrixConnected) {
+          throw new Error('Matrix connection required');
+        }
+      },
+      validateAllConnections: async () => {
+        const status = await this._checkStatus();
+        const missing = this._checkRequiredPlatforms(status);
+        if (missing.length > 0) {
+          throw new Error(`Missing connections: ${missing.join(', ')}`);
+        }
+      }
+    };
   }
 
   async getOnboardingStatus(forceRefresh = false) {
@@ -101,113 +175,166 @@ class OnboardingService {
     return null;
   }
 
-  _validateStepTransition(currentStep, nextStep, isComplete = false) {
+  async _validateStepTransition(currentStep, nextStep, isComplete = false) {
     // If onboarding is complete, prevent any changes
     if (isComplete) {
       logger.info('[OnboardingService] Preventing step change - onboarding complete');
       throw new Error('Cannot modify completed onboarding');
     }
 
-    // If no current step, only allow initial steps
-    if (!currentStep) {
+    // Get state config
+    const currentState = STATE_CONFIG[currentStep];
+    if (!currentState) {
       const validInitialSteps = ['initial', 'whatsapp', 'matrix'];
       const isValid = validInitialSteps.includes(nextStep);
       logger.debug('[OnboardingService] Validating initial step:', { nextStep, isValid });
       return isValid;
     }
 
-    // Define valid transitions
-    const validTransitions = {
-      'initial': ['whatsapp', 'matrix'],
-      'whatsapp': ['matrix', 'complete'],
-      'matrix': ['whatsapp', 'complete'],
-      'complete': [] // No transitions allowed from complete
-    };
-
-    const isValid = validTransitions[currentStep]?.includes(nextStep) ?? false;
+    // Validate transition
+    const isValid = currentState.allowedTransitions.includes(nextStep);
     logger.debug('[OnboardingService] Validating step transition:', {
       from: currentStep,
       to: nextStep,
       isValid
     });
-    return isValid;
+
+    if (!isValid) {
+      throw new Error(`Invalid transition from ${currentStep} to ${nextStep}`);
+    }
+
+    // Run validation rules
+    const nextStateConfig = STATE_CONFIG[nextStep];
+    if (nextStateConfig?.validationRules) {
+      for (const rule of nextStateConfig.validationRules) {
+        await this.validationRules[rule]();
+      }
+    }
+
+    return true;
   }
 
-  async updateOnboardingStep(step, data) {
-    const lockKey = `update_${step}`;
+  async _acquireTransitionLock(userId) {
+    const lockKey = `transition_${userId}`;
+    if (this.transitionLocks.has(lockKey)) {
+      throw new Error('State transition already in progress');
+    }
+    const lock = new Promise((resolve) => resolve());
+    this.transitionLocks.set(lockKey, lock);
+    return lock;
+  }
+
+  async _releaseTransitionLock(userId) {
+    const lockKey = `transition_${userId}`;
+    this.transitionLocks.delete(lockKey);
+  }
+
+  async _executeWithRetry(operation, retryCount = 0) {
     try {
-      const updatePromise = (async () => {
+      return await operation();
+    } catch (error) {
+      if (retryCount < this.MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * Math.pow(2, retryCount)));
+        return this._executeWithRetry(operation, retryCount + 1);
+      }
+      throw error;
+    }
+  }
+
+  async updateOnboardingStep(step, userId) {
+    return executeAtomically(`onboarding:${userId}`, async () => {
+      let currentStatus;
+      let transactionId;
+      
+      try {
         // Get current status first
-        const currentStatus = await this.getOnboardingStatus(true);
+        currentStatus = await this.getOnboardingStatus(true);
         logger.debug('[OnboardingService] Current status before update:', currentStatus);
         
-        // If onboarding is complete, prevent any changes
-        if (currentStatus.isComplete) {
-          logger.info('[OnboardingService] Rejecting update - onboarding already complete');
-          throw new Error('Cannot modify completed onboarding');
-        }
+        // Validate transition
+        await this._validateStepTransition(currentStatus.currentStep, step, currentStatus.isComplete);
 
-        // Add step validation
-        if (!this._validateStepTransition(currentStatus.currentStep, step, currentStatus.isComplete)) {
-          logger.info('[OnboardingService] Rejecting invalid step transition:', {
-            from: currentStatus.currentStep,
-            to: step
+        // Start transaction
+        transactionId = crypto.randomUUID();
+        
+        const result = await this._executeWithRetry(async () => {
+          // Run exit hooks for current state
+          const currentState = STATE_CONFIG[currentStatus.currentStep];
+          if (currentState?.onExit) {
+            await currentState.onExit(this);
+          }
+
+          // Execute update
+          const { data, error } = await api.post('/user/onboarding-status', { 
+            currentStep: step,
+            transactionId,
+            previousStep: currentStatus.currentStep
           });
-          throw new Error(`Invalid step transition from ${currentStatus.currentStep} to ${step}`);
-        }
+          
+          if (error) {
+            // Handle duplicate transaction
+            if (error.status === 409) {
+              logger.info('[OnboardingService] Transaction already processed:', transactionId);
+              return data;
+            }
+            throw error;
+          }
 
-        // Verify platform connections for completion
-        if (step === 'complete') {
-          const missingPlatforms = this._checkRequiredPlatforms(currentStatus);
-          if (missingPlatforms.length > 0) {
-            logger.info('[OnboardingService] Cannot complete - missing platforms:', missingPlatforms);
-            throw new Error(`Cannot complete onboarding: missing platforms: ${missingPlatforms.join(', ')}`);
+          // Run enter hooks for new state
+          const nextState = STATE_CONFIG[step];
+          if (nextState?.onEnter) {
+            await nextState.onEnter(this);
+          }
+
+          return data;
+        });
+
+        // Clear cache to force refresh
+        this.cache.delete('current');
+
+        return result;
+
+      } catch (error) {
+        logger.error('[OnboardingService] Update failed:', error);
+
+        if (currentStatus) {
+          // Attempt rollback
+          try {
+            logger.info('[OnboardingService] Attempting rollback to:', currentStatus.currentStep);
+            await this._executeWithRetry(async () => {
+          await api.post('/user/onboarding-status', {
+                currentStep: currentStatus.currentStep,
+                transactionId: `${transactionId}_rollback`,
+                previousStep: step,
+                isRollback: true
+              });
+            });
+            logger.info('[OnboardingService] Rollback successful');
+          } catch (rollbackError) {
+            logger.error('[OnboardingService] Rollback failed:', rollbackError);
+            throw new Error(`Update failed and rollback failed. Original error: ${error.message}. Rollback error: ${rollbackError.message}`);
           }
         }
 
-        // Add optimistic update
-        const optimisticStatus = {
-          ...currentStatus,
-          currentStep: step,
-          lastChecked: Date.now()
-        };
-        this.cache.set('current', optimisticStatus);
-        logger.debug('[OnboardingService] Applied optimistic update:', optimisticStatus);
-
-        try {
-          await api.post('/user/onboarding-status', {
-            step,
-            data,
-            currentStatus,
-            timestamp: Date.now()
-          });
-        } catch (error) {
-          // Revert optimistic update on failure
-          this.cache.delete('current');
-          logger.info('[OnboardingService] API update failed, reverting optimistic update:', error);
-          throw error;
-        }
-
-        // Get fresh status
-        const newStatus = await this.getOnboardingStatus(true);
-        logger.debug('[OnboardingService] Update complete, new status:', newStatus);
-        return newStatus;
-      })();
-
-      // Store update promise with unique key per step
-      this.updateLocks.set(lockKey, updatePromise);
-
-      try {
-        return await updatePromise;
-      } finally {
-        // Only clear if this was the last update for this step
-        if (this.updateLocks.get(lockKey) === updatePromise) {
-          this.updateLocks.delete(lockKey);
-        }
+        throw error;
       }
-    } catch (error) {
-      logger.info('[OnboardingService] Step update failed:', { step, error });
-      throw error;
+    });
+  }
+
+  _emitStateChange(fromState, toState) {
+    logger.info('[OnboardingService] State transition:', {
+      from: fromState,
+      to: toState,
+      timestamp: new Date().toISOString()
+    });
+
+    // Could integrate with analytics or monitoring here
+    if (window.analytics) {
+      window.analytics.track('Onboarding State Change', {
+        fromState,
+        toState,
+        timestamp: new Date().toISOString()
+      });
     }
   }
 

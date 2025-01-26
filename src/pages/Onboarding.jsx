@@ -12,27 +12,33 @@ import { onboardingService } from '../services/onboardingService';
 // Onboarding steps configuration
 const ONBOARDING_STEPS = {
   INITIAL: 'initial',
-  WHATSAPP: 'whatsapp',
+  PROTOCOL_SELECTION: 'protocol_selection',
   MATRIX: 'matrix',
+  WHATSAPP: 'whatsapp',
   COMPLETE: 'complete'
 };
 
 // Add step metadata
 const STEP_METADATA = {
   [ONBOARDING_STEPS.INITIAL]: {
-    title: 'Welcome to DailyFiz',
-    description: 'Let\'s get you set up with your messaging platforms.',
-    nextSteps: ['whatsapp', 'matrix']
+    title: 'Welcome to DailyFix',
+    description: 'Let\'s get you set up with a secure messaging protocol.',
+    nextSteps: ['protocol_selection']
   },
-  [ONBOARDING_STEPS.WHATSAPP]: {
-    title: 'Connect WhatsApp',
-    description: 'Link your WhatsApp account to start syncing messages.',
-    nextSteps: ['matrix', 'complete']
+  [ONBOARDING_STEPS.PROTOCOL_SELECTION]: {
+    title: 'Select Your Protocol',
+    description: 'Choose Matrix as your secure messaging protocol.',
+    nextSteps: ['matrix']
   },
   [ONBOARDING_STEPS.MATRIX]: {
     title: 'Connect Matrix',
     description: 'Set up your Matrix account for secure messaging.',
-    nextSteps: ['whatsapp', 'complete']
+    nextSteps: ['whatsapp']
+  },
+  [ONBOARDING_STEPS.WHATSAPP]: {
+    title: 'Connect WhatsApp',
+    description: 'Link your WhatsApp account to start syncing messages through Matrix.',
+    nextSteps: ['complete']
   },
   [ONBOARDING_STEPS.COMPLETE]: {
     title: 'Setup Complete',
@@ -47,10 +53,12 @@ const isValidStep = (step) => Object.values(ONBOARDING_STEPS).includes(step);
 const getNextStep = (currentStep, connectedPlatforms = []) => {
   switch (currentStep) {
     case ONBOARDING_STEPS.INITIAL:
-      return connectedPlatforms.includes('whatsapp') ? ONBOARDING_STEPS.MATRIX : ONBOARDING_STEPS.WHATSAPP;
-    case ONBOARDING_STEPS.WHATSAPP:
-      return connectedPlatforms.includes('matrix') ? ONBOARDING_STEPS.COMPLETE : ONBOARDING_STEPS.MATRIX;
+      return ONBOARDING_STEPS.PROTOCOL_SELECTION;
+    case ONBOARDING_STEPS.PROTOCOL_SELECTION:
+      return ONBOARDING_STEPS.MATRIX;
     case ONBOARDING_STEPS.MATRIX:
+      return connectedPlatforms.includes('matrix') ? ONBOARDING_STEPS.WHATSAPP : ONBOARDING_STEPS.MATRIX;
+    case ONBOARDING_STEPS.WHATSAPP:
       return connectedPlatforms.includes('whatsapp') ? ONBOARDING_STEPS.COMPLETE : ONBOARDING_STEPS.WHATSAPP;
     case ONBOARDING_STEPS.COMPLETE:
       return null;
@@ -69,13 +77,13 @@ const WelcomeStep = ({ onNext }) => {
     <div className="max-w-lg mx-auto text-center p-8">
       <h1 className="text-3xl font-bold mb-4">Welcome to Daily Fix</h1>
       <p className="text-gray-300 mb-8">
-        Your centralized messaging hub. Let's get you set up in just a few steps.
+        Your centralized messaging hub powered by Matrix. Let's get you set up in just a few steps.
       </p>
       <button
-        onClick={onNext}
+        onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
         className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/80 transition-colors"
       >
-        Get Started
+        Get Started with Matrix
       </button>
     </div>
   );
@@ -97,14 +105,6 @@ const MatrixSetupStep = ({ onNext }) => {
         setStatus(prev => ({ ...prev, loading: true, error: null }));
         const onboardingStatus = await onboardingService.getOnboardingStatus(true);
         
-        // If both are connected, complete onboarding
-        if (onboardingStatus.whatsappConnected && onboardingStatus.matrixConnected) {
-          setStatus(prev => ({ ...prev, showSuccess: true }));
-          await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
-          navigate('/dashboard', { replace: true });
-          return;
-        }
-
         setStatus(prev => ({
           ...prev,
           loading: false,
@@ -128,13 +128,19 @@ const MatrixSetupStep = ({ onNext }) => {
       setStatus(prev => ({ ...prev, loading: true, error: null }));
       const onboardingStatus = await onboardingService.getOnboardingStatus(true);
 
-      if (onboardingStatus.whatsappConnected) {
-        setStatus(prev => ({ ...prev, showSuccess: true }));
-        await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
-        navigate('/dashboard', { replace: true });
-      } else {
-        await dispatch(updateOnboardingStep({ step: 'whatsapp' })).unwrap();
+      // Only proceed if Matrix is connected
+      if (!onboardingStatus.matrixConnected) {
+        setStatus(prev => ({
+          ...prev,
+          loading: false,
+          error: 'Matrix connection is required before proceeding.'
+        }));
+        return;
       }
+
+      // Proceed to WhatsApp setup
+      await dispatch(updateOnboardingStep({ step: 'whatsapp' })).unwrap();
+      onNext();
     } catch (error) {
       console.error('Error completing setup:', error);
       setStatus(prev => ({
@@ -158,7 +164,7 @@ const MatrixSetupStep = ({ onNext }) => {
             onClick={handleComplete}
             className="px-6 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
           >
-            Continue
+            Continue to WhatsApp Setup
           </button>
         </div>
       ) : (
@@ -172,9 +178,16 @@ const MatrixSetupStep = ({ onNext }) => {
           <button
             onClick={handleComplete}
             className="w-full px-6 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
+            disabled={!status.connectionStatus === 'connected'}
           >
             Continue
           </button>
+        </div>
+      )}
+
+      {status.error && (
+        <div className="mt-4 p-4 bg-red-500/10 border border-red-500 rounded-lg">
+          <p className="text-red-400">{status.error}</p>
         </div>
       )}
     </div>
@@ -326,12 +339,11 @@ const WhatsAppSetupStep = () => {
     loading: true,
     error: null,
     showSuccess: false,
-    connectionStatus: null
+    connectionStatus: null,
+    matrixConnected: false
   });
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { session } = useSelector(state => state.auth);
-  const { currentStep } = useSelector(state => state.onboarding);
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -339,6 +351,21 @@ const WhatsAppSetupStep = () => {
         setStatus(prev => ({ ...prev, loading: true, error: null }));
         const onboardingStatus = await onboardingService.getOnboardingStatus(true);
         
+        // Strict Matrix dependency check
+        if (!onboardingStatus.matrixConnected) {
+          setStatus(prev => ({
+            ...prev,
+            loading: false,
+            error: 'Matrix connection is required. Redirecting to Matrix setup...'
+          }));
+          // Short delay to show the error message
+          setTimeout(async () => {
+            await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
+            navigate('/onboarding/matrix', { replace: true });
+          }, 2000);
+          return;
+        }
+
         // If both are connected, complete onboarding
         if (onboardingStatus.whatsappConnected && onboardingStatus.matrixConnected) {
           setStatus(prev => ({ ...prev, showSuccess: true }));
@@ -347,15 +374,10 @@ const WhatsAppSetupStep = () => {
           return;
         }
 
-        // If WhatsApp is connected but Matrix isn't, move to Matrix setup
-        if (onboardingStatus.whatsappConnected && !onboardingStatus.matrixConnected) {
-          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
-          return;
-        }
-
         setStatus(prev => ({
           ...prev,
           loading: false,
+          matrixConnected: onboardingStatus.matrixConnected,
           connectionStatus: onboardingStatus.whatsappConnected ? 'connected' : 'disconnected'
         }));
       } catch (error) {
@@ -376,12 +398,24 @@ const WhatsAppSetupStep = () => {
       setStatus(prev => ({ ...prev, loading: true, error: null }));
       const onboardingStatus = await onboardingService.getOnboardingStatus(true);
 
-      if (onboardingStatus.matrixConnected) {
+      // Double-check Matrix connection
+      if (!onboardingStatus.matrixConnected) {
+        setStatus(prev => ({
+          ...prev,
+          loading: false,
+          error: 'Matrix connection is required. Redirecting to Matrix setup...'
+        }));
+        setTimeout(async () => {
+          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
+          navigate('/onboarding/matrix', { replace: true });
+        }, 2000);
+        return;
+      }
+
+      if (onboardingStatus.whatsappConnected) {
         setStatus(prev => ({ ...prev, showSuccess: true }));
         await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
         navigate('/dashboard', { replace: true });
-      } else {
-        await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
       }
     } catch (error) {
       console.error('Error completing setup:', error);
@@ -554,11 +588,13 @@ const Onboarding = () => {
   const renderStep = () => {
     switch (currentStep) {
       case ONBOARDING_STEPS.INITIAL:
-        return <WelcomeStep onNext={() => handleStepChange(ONBOARDING_STEPS.WHATSAPP)} />;
+        return <WelcomeStep onNext={handleStepChange} />;
+      case ONBOARDING_STEPS.PROTOCOL_SELECTION:
+        return <ProtocolSelectionStep onNext={() => handleStepChange(ONBOARDING_STEPS.MATRIX)} />;
+      case ONBOARDING_STEPS.MATRIX:
+        return <MatrixSetupStep onNext={() => handleStepChange(ONBOARDING_STEPS.WHATSAPP)} />;
       case ONBOARDING_STEPS.WHATSAPP:
         return <WhatsAppSetupStep />;
-      case ONBOARDING_STEPS.MATRIX:
-        return <MatrixSetupStep onNext={() => handleStepChange(ONBOARDING_STEPS.COMPLETE)} />;
       case ONBOARDING_STEPS.COMPLETE:
         return <CompletionStep />;
       default:

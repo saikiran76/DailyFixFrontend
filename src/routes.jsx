@@ -4,14 +4,14 @@ import { useSelector } from 'react-redux';
 import Login from './pages/Login';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
-import WhatsAppConnection from './components/WhatsAppConnection';
-import TelegramConnection from './components/TelegramConnection';
-import DiscordConnection from './components/DiscordConnection';
-import DiscordCallback from './components/DiscordCallback';
-import DiscordView from './components/discord/DiscordView';
-import MainEntitiesView from './components/discord/MainEntitiesView';
-import ServerDetailsView from './components/discord/ServerDetailsView';
-import ReportGenerationView from './components/discord/ReportGenerationView';
+// import WhatsAppConnection from './components/WhatsAppConnection';
+// import TelegramConnection from './components/TelegramConnection';
+// import DiscordConnection from './components/DiscordConnection';
+// import DiscordCallback from './components/DiscordCallback';
+// import DiscordView from './components/discord/DiscordView';
+// import MainEntitiesView from './components/discord/MainEntitiesView';
+// import ServerDetailsView from './components/discord/ServerDetailsView';
+// import ReportGenerationView from './components/discord/ReportGenerationView';
 import ProtectedRoute from './components/ProtectedRoute';
 import logger from './utils/logger';
 
@@ -32,7 +32,7 @@ const AppRoutes = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/oauth/discord/callback" element={<DiscordCallback />} />
+      {/* <Route path="/oauth/discord/callback" element={<DiscordCallback />} /> */}
       <Route 
         path="/dashboard/*" 
         element={
@@ -41,12 +41,12 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="discord" replace />} />
+        {/* <Route index element={<Navigate to="discord" replace />} />
         <Route path="discord" element={<DiscordView />}>
           <Route index element={<MainEntitiesView />} />
           <Route path="servers/:serverId" element={<ServerDetailsView />} />
           <Route path="servers/:serverId/report" element={<ReportGenerationView />} />
-        </Route>
+        </Route> */}
       </Route>
       <Route 
         path="/onboarding/*" 
@@ -56,7 +56,7 @@ const AppRoutes = () => {
           </ProtectedRoute>
         }
       />
-      <Route 
+      {/* <Route 
         path="/connect/*" 
         element={
           <ProtectedRoute>
@@ -67,7 +67,7 @@ const AppRoutes = () => {
             </Routes>
           </ProtectedRoute>
         }
-      />
+      /> */}
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

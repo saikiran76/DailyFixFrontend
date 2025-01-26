@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MessageBatchProcessor } from '../../utils/MessageBatchProcessor';
 import { useSocket } from '../../hooks/useSocket';
+import api from '../../utils/api';
 
 export function WhatsAppChat({ contactId }) {
   const [messages, setMessages] = useState([]);
@@ -51,14 +52,15 @@ export function WhatsAppChat({ contactId }) {
         socket.off('whatsapp:message_update', handleMessageUpdate);
       }
     };
-  }, [socket, isConnected, contactId]);
+  }, [contactId, socket, isConnected]);
 
   const loadMessages = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/whatsapp/messages/${contactId}`);
-      const data = await response.json();
-      setMessages(data.messages);
+      const response = await api.get(`/api/whatsapp-entities/contacts/${contactId}/messages`);
+      if (response.data?.messages) {
+        setMessages(response.data.messages);
+      }
     } catch (error) {
       console.error('Failed to load messages:', error);
     } finally {

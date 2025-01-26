@@ -29,7 +29,7 @@ export const useWhatsAppConnection = () => {
     }
 
     try {
-      socket.emit('whatsapp_status_check');
+      socket.emit('whatsapp:status_check');
     } catch (error) {
       console.error('Status check failed:', error);
       setState(prev => ({
@@ -84,7 +84,7 @@ export const useWhatsAppConnection = () => {
       }));
 
       // Set up WhatsApp status listener
-      socket.on('whatsapp_status', (data) => {
+      socket.on('whatsapp:status', (data) => {
         setState(prev => ({
           ...prev,
           status: data.status,
@@ -97,7 +97,7 @@ export const useWhatsAppConnection = () => {
         }
       });
 
-      socket.on('whatsapp_error', (error) => {
+      socket.on('whatsapp:error', (error) => {
         setState(prev => ({
           ...prev,
           status: 'error',
@@ -108,7 +108,7 @@ export const useWhatsAppConnection = () => {
       });
 
       // Request WhatsApp connection
-      socket.emit('whatsapp_connect');
+      socket.emit('whatsapp:connect');
 
       return socket;
 

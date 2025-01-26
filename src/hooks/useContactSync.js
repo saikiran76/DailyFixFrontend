@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSocket } from './useSocket';
 import { contactService } from '../services/contactService';
+import { api } from '../services/api';
 
 export function useContactSync() {
   const [contacts, setContacts] = useState([]);
@@ -101,7 +102,7 @@ export function useContactSync() {
       }
 
       // If no cache or force refresh, load from API
-      const response = await fetch('/api/whatsapp/contacts');
+      const response = await api.get('/api/whatsapp-entities/contacts');
       const data = await response.json();
       
       if (!data?.contacts) {

@@ -229,8 +229,8 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       message: (message) => {
         if (!socket || !isOnline || !currentUser) {
           messageCache.current.set(message.message_id, message);
-          return;
-        }
+        return;
+    }
 
         if (message.contact_id === selectedContact?.id) {
           batchProcessorRef.current?.addMessage(message);
@@ -247,17 +247,32 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       syncProgress: (data) => {
         if (!currentUser) return;
         
-        if (data.contactId === selectedContact?.id) {
+            if (data.contactId === selectedContact?.id) {
           logger.info('[ChatView] Sync progress:', data);
-          if (data.messages?.length > 0) {
-            batchProcessorRef.current?.addMessage(...data.messages);
+          
+          // Validate progress data
+          if (typeof data.progress !== 'number' || data.progress < 0 || data.progress > 100) {
+            logger.warn('[ChatView] Invalid sync progress value:', data.progress);
+            return;
           }
+          
+          // Add messages to batch processor if available
+          if (Array.isArray(data.messages) && data.messages.length > 0) {
+            try {
+              batchProcessorRef.current?.addMessage(...data.messages);
+            } catch (error) {
+              logger.error('[ChatView] Error processing sync messages:', error);
+            }
+          }
+          
+          // Update sync state with validated data
           updateSyncState({
             state: SYNC_STATES.APPROVED,
-            progress: data.progress || 0,
+            progress: data.progress,
             details: data.details || SYNC_STATUS_MESSAGES[SYNC_STATES.APPROVED],
             processedMessages: data.processedMessages || 0,
-            totalMessages: data.totalMessages || 0
+            totalMessages: data.totalMessages || 0,
+            lastUpdate: Date.now()
           });
         }
       },
@@ -268,31 +283,50 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         if (data.contactId === selectedContact?.id) {
           logger.info('[ChatView] Sync state update:', data);
           
+          // Validate state transition
+          const validStates = ['pending', 'approved', 'rejected'];
+          if (!validStates.includes(data.state)) {
+            logger.warn('[ChatView] Invalid sync state:', data.state);
+            return;
+          }
+          
           let newState;
+          let stateDetails = '';
+          
           switch (data.state) {
             case 'pending':
               newState = SYNC_STATES.PENDING;
+              stateDetails = 'Waiting for sync to start...';
               break;
             case 'approved':
               newState = SYNC_STATES.APPROVED;
+              stateDetails = 'Sync in progress...';
               break;
             case 'rejected':
               newState = SYNC_STATES.REJECTED;
+              stateDetails = data.error || 'Sync failed';
               break;
             default:
-              logger.warn('[ChatView] Unknown sync state:', data.state);
+              logger.warn('[ChatView] Unhandled sync state:', data.state);
               return;
           }
-
+          
+          // Update sync state with validation
           updateSyncState({
             state: newState,
-            details: SYNC_STATUS_MESSAGES[newState],
-            errors: data.error ? [...syncState.errors, {
-              message: data.error,
-              timestamp: Date.now()
-            }] : syncState.errors
+            details: data.details || stateDetails,
+            errors: data.error ? [
+              ...syncState.errors,
+              {
+                message: data.error,
+                timestamp: Date.now(),
+                type: data.errorType || 'SYNC_ERROR'
+              }
+            ] : syncState.errors,
+            lastStateChange: Date.now()
           });
-
+          
+          // Handle auth errors
           if (newState === SYNC_STATES.REJECTED && data.errorType === 'AUTH_ERROR') {
             toast.error('Authentication failed. Please log in again.');
             // Trigger token refresh
@@ -306,6 +340,9 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
                 // Update API token
                 await api.getAuthState();
               }
+            }).catch(error => {
+              logger.error('[ChatView] Token refresh failed:', error);
+              toast.error('Failed to refresh authentication. Please log in again.');
             });
           }
         }
@@ -379,8 +416,8 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     if (selectedContact?.id) {
       // Reset states
       setMessages([]);
-      setLoading(true);
-      setError(null);
+    setLoading(true);
+    setError(null);
       setHasMoreMessages(true);
       setPage(0);
       
@@ -459,7 +496,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     setError(null);
     
     try {
-      const response = await api.get(`/api/whatsapp-entities/messages/${selectedContact.id}?page=${page}`);
+      const response = await api.get(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages?page=${page}`);
       
       if (page === 0) {
         setMessages(response.data.messages);
@@ -479,7 +516,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         });
         
         try {
-          await api.post(`/api/whatsapp-entities/sync/${selectedContact.id}`);
+          await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/sync`);
         } catch (syncErr) {
           handleSyncError(syncErr);
         }

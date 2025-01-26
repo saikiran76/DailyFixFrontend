@@ -243,13 +243,17 @@ class SyncService {
       const lastSync = await this._getLastMessageSync(userId);
       
       // Get messages since last sync
-      const { data: messages } = await api.get('/whatsapp/messages', {
+      const { data: messages } = await api.get(`/api/whatsapp-entities/contacts/${userId}/messages`, {
         params: { since: lastSync }
       });
 
+      if (!messages?.data) {
+        throw new Error('No messages received from server');
+      }
+
       // Process messages in batches
-      const batches = this._createBatches(messages, MAX_BATCH_SIZE);
-      const total = messages.length;
+      const batches = this._createBatches(messages.data, MAX_BATCH_SIZE);
+      const total = messages.data.length;
       let processed = 0;
 
       for (const batch of batches) {
@@ -258,6 +262,9 @@ class SyncService {
         
         processed += batch.length;
         this.syncProgress.messages = Math.round((processed / total) * 100);
+
+        // Emit progress update
+        this._emitSyncProgress('messages', this.syncProgress.messages);
       }
 
       // Update last sync time
@@ -266,7 +273,7 @@ class SyncService {
       logger.info('[Sync] Message sync completed for user:', userId);
       return { synced: processed };
     } catch (error) {
-      logger.info('[Sync] Message sync error:', error);
+      logger.error('[Sync] Message sync error:', error);
       throw error;
     }
   }
