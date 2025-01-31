@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { signIn } from '../store/slices/authSlice';
 import logger from '../utils/logger';
 
@@ -50,7 +50,7 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-10 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
@@ -121,6 +121,12 @@ const Login = () => {
             </button>
           </div>
         </form>
+      </div>
+
+      <div className="mt-3 ml-4">
+        <p className="text-center text-gray-400 mt-4">
+          Don't have an account? <Link to="/signup" className="text-primary hover:text-primary/80">Register</Link>
+        </p>
       </div>
     </div>
   );

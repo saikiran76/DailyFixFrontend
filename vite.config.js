@@ -9,12 +9,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/auth': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3002',
         changeOrigin: true,
         secure: false
       },
       '/connect/discord': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3002',
         changeOrigin: true,
         secure: false,
         configure: (proxy, _options) => {
@@ -28,7 +28,7 @@ export default defineConfig({
         }
       },
       '/discord': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3002',
         changeOrigin: true,
         secure: false,
         rewrite: (path) => `/connect${path}`,

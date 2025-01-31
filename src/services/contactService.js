@@ -57,51 +57,7 @@ class ContactService {
   }
 
   /**
-   * Gets all contacts for a user with caching
-   * @param {string} userId - The user ID
-   * @returns {Promise<Array>} Array of contacts
-   */
-  async getUserContacts(userId) {
-    if (!userId) {
-      throw new AppError(ErrorTypes.VALIDATION, 'User ID is required');
-    }
-
-    // Check cache first
-    const cachedContacts = this._getCachedContacts(userId);
-    if (cachedContacts) {
-      logger.info('[ContactService] Returning cached contacts for user:', userId);
-      return cachedContacts;
-    }
-
-    try {
-      logger.info('[ContactService] Fetching contacts for user:', userId);
-      const response = await api.get(`${WHATSAPP_API_PREFIX}/contacts`, {
-        params: { userId }
-      });
-
-      if (!response?.data?.data) {
-        throw new AppError(ErrorTypes.API, 'Invalid response from contacts API');
-      }
-
-      const contacts = response.data.data;
-
-      // Update cache
-      this.cache.set(userId, {
-        contacts,
-        timestamp: Date.now()
-      });
-
-      logger.info('[ContactService] Successfully fetched contacts:', contacts.length);
-      return contacts;
-    } catch (error) {
-      logger.error('[ContactService] Error fetching user contacts:', error);
-      throw handleError(error, 'Failed to fetch user contacts');
-    }
-  }
-
-  /**
-   * Gets all contacts for the current user with caching
-   * @returns {Promise<Array>} Array of contacts
+   * Gets contacts for the current user with proper sync state handling
    */
   async getCurrentUserContacts() {
     try {
@@ -109,14 +65,92 @@ class ContactService {
       const userId = state.auth.session?.user?.id;
 
       if (!userId) {
+        logger.warn('[ContactService] No authenticated user found');
         throw new AppError(ErrorTypes.AUTH, 'No authenticated user found');
       }
 
+      logger.info('[ContactService] Fetching contacts for user:', userId);
+
+      // Check if sync is in progress
+      if (this.syncInProgress.get(userId)) {
+        logger.info('[ContactService] Sync in progress for user:', userId);
+        return { inProgress: true };
+      }
+
+      // Try cache only if sync is not in progress and cache is valid
+      const cachedContacts = this._getCachedContacts(userId);
+      if (cachedContacts) {
+        logger.info('[ContactService] Returning cached contacts for user:', userId);
+        return { contacts: cachedContacts };
+      }
+
+      // If no cache, initiate a fresh fetch
       return this.getUserContacts(userId);
     } catch (error) {
       logger.error('[ContactService] Error fetching current user contacts:', error);
       throw handleError(error, 'Failed to fetch current user contacts');
     }
+  }
+
+  /**
+   * Gets contacts for a specific user
+   */
+  async getUserContacts(userId) {
+    if (!userId) {
+      throw new AppError(ErrorTypes.VALIDATION, 'User ID is required');
+    }
+
+    try {
+      const response = await api.get(`${WHATSAPP_API_PREFIX}/contacts`);
+      
+      // Log the response for debugging
+      logger.info('[ContactService] Raw API response:', response?.data);
+
+      // Check for different possible response structures
+      const contacts = response?.data?.data;
+      
+      if (!contacts || !Array.isArray(contacts)) {
+        logger.error('[ContactService] Invalid response structure:', response?.data);
+        throw new AppError(ErrorTypes.API, 'Invalid response from contacts API');
+      }
+
+      // Cache the results
+      this.cache.set(userId, {
+        contacts: contacts,
+        timestamp: Date.now()
+      });
+
+      logger.info('[ContactService] Successfully fetched contacts for user:', userId);
+      return { contacts: contacts };
+    } catch (error) {
+      logger.error('[ContactService] Error fetching user contacts:', {
+        error: error.message,
+        stack: error.stack,
+        userId
+      });
+      throw handleError(error, 'Failed to fetch user contacts');
+    }
+  }
+
+  /**
+   * Gets sync status for a user
+   */
+  async getSyncStatus(userId) {
+    if (!userId) return null;
+    return this.syncInProgress.get(userId) || null;
+  }
+
+  /**
+   * Sets sync status for a user
+   */
+  setSyncStatus(userId, status) {
+    if (!userId) return;
+    if (status) {
+      this.syncInProgress.set(userId, status);
+    } else {
+      this.syncInProgress.delete(userId);
+    }
+    logger.info('[ContactService] Sync status updated for user:', userId, status);
   }
 
   /**

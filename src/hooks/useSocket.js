@@ -1,68 +1,64 @@
-import { useEffect, useRef } from 'react';
-import { useSelector } from 'react-redux';
+import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import { selectSession } from '../store/slices/authSlice';
 import logger from '../utils/logger';
 
-const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002';
 
-export function useSocket() {
-  const socketRef = useRef(null);
-  const session = useSelector(selectSession);
+export const useSocket = () => {
+  const [socket, setSocket] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [lastError, setLastError] = useState(null);
 
   useEffect(() => {
-    if (!session?.access_token || !session?.user?.id) {
-      logger.debug('[useSocket] No valid session, skipping socket connection');
-      return;
-    }
+    // Initialize socket
+    const socketInstance = io(SOCKET_URL, {
+      transports: ['websocket'],
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
 
-    try {
-      logger.info('[useSocket] Initializing socket connection');
-      
-      socketRef.current = io(SOCKET_URL, {
-        auth: {
-          token: session.access_token,
-          userId: session.user.id
-        },
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 10000,
-        transports: ['websocket']
-      });
+    // Connection event handlers
+    socketInstance.on('connect', () => {
+      logger.info('Socket connected');
+      setIsConnected(true);
+      setLastError(null);
+    });
 
-      const socket = socketRef.current;
+    socketInstance.on('disconnect', (reason) => {
+      logger.warn('Socket disconnected:', reason);
+      setIsConnected(false);
+    });
 
-      socket.on('connect', () => {
-        logger.info('[useSocket] Socket connected successfully');
-      });
+    socketInstance.on('connect_error', (error) => {
+      logger.error('Socket connection error:', error);
+      setLastError(error.message);
+      setIsConnected(false);
+    });
 
-      socket.on('connect_error', (error) => {
-        logger.error('[useSocket] Socket connection error:', error);
-      });
+    socketInstance.on('error', (error) => {
+      logger.error('Socket error:', error);
+      setLastError(error.message);
+    });
 
-      socket.on('disconnect', (reason) => {
-        logger.warn('[useSocket] Socket disconnected:', reason);
-      });
+    // Set socket instance
+    setSocket(socketInstance);
 
-      socket.on('error', (error) => {
-        logger.error('Socket error:', error);
-      });
+    // Cleanup on unmount
+    return () => {
+      if (socketInstance) {
+        socketInstance.removeAllListeners();
+        socketInstance.close();
+      }
+    };
+  }, []);
 
-      return () => {
-        if (socket) {
-          logger.info('[useSocket] Cleaning up socket connection');
-          socket.disconnect();
-          socketRef.current = null;
-        }
-      };
-    } catch (error) {
-      logger.error('[useSocket] Failed to initialize socket:', error);
-    }
-  }, [session?.access_token, session?.user?.id]);
-
-  return socketRef.current;
-}
-
-export default useSocket; 
+  return {
+    socket,
+    isConnected,
+    lastError,
+  };
+}; 

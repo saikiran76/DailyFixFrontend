@@ -5,7 +5,7 @@ import logger from './logger';
 import TokenManager from './tokenManager';
 import tokenService from '../services/tokenService';
 
-const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3002';
 
 // Socket connection states for better state management
 export const SOCKET_STATES = {
@@ -86,6 +86,9 @@ export const initializeSocket = async (options = {}) => {
 
   try {
     connectionAttemptInProgress = true;
+    socketState.state = SOCKET_STATES.CONNECTING;
+    socketState.connectionStart = Date.now();
+
     connectionPromise = new Promise(async (resolve, reject) => {
       try {
         if (socketInstance && !socketInstance.connected) {
@@ -96,75 +99,113 @@ export const initializeSocket = async (options = {}) => {
         // Get valid token using token service with retry
         let tokens = null;
         let retryCount = 0;
-        const maxRetries = 3;
+        const maxRetries = CONNECTION_CONFIG.RECONNECTION_ATTEMPTS;
 
-        while (!tokens && retryCount < maxRetries) {
+        while (retryCount < maxRetries) {
           try {
-            tokens = await tokenService.getValidToken();
-            logger.info('---tokens----', tokens)
-        if (!tokens?.access_token) {
-          throw new Error('No valid token available');
-            }
+            const tokenData = await tokenService.getValidToken();
+            tokens = {
+              accessToken: tokenData.access_token,
+              userId: tokenData.userId
+            };
+            break;
           } catch (error) {
             retryCount++;
             if (retryCount === maxRetries) {
               throw error;
             }
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+            await new Promise(r => setTimeout(r, CONNECTION_CONFIG.RECONNECTION_DELAY));
           }
         }
 
-        logger.info('Creating new socket connection', {
-          hasToken: !!tokens.access_token,
-          userId: tokens.userId
-        });
+        if (!tokens?.accessToken) {
+          throw new Error('No valid access token available');
+        }
 
+        // Initialize socket with robust configuration
         socketInstance = io(SOCKET_URL, {
           auth: {
-            token: tokens.access_token,
+            token: tokens.accessToken,
             userId: tokens.userId
           },
-          transports: ['websocket'],
           reconnection: true,
           reconnectionAttempts: CONNECTION_CONFIG.RECONNECTION_ATTEMPTS,
           reconnectionDelay: CONNECTION_CONFIG.RECONNECTION_DELAY,
           reconnectionDelayMax: CONNECTION_CONFIG.RECONNECTION_DELAY_MAX,
-          timeout: options.timeout || CONNECTION_CONFIG.CONNECTION_TIMEOUT,
-          forceNew: true,
-          autoConnect: false // Prevent auto-connection before setup
+          timeout: CONNECTION_CONFIG.CONNECTION_TIMEOUT,
+          transports: ['websocket', 'polling']
         });
 
-        // Subscribe to token updates with error handling
-        const unsubscribe = tokenService.subscribe(async (newTokens) => {
-          try {
-          if (socketInstance?.connected) {
-            logger.info('Updating socket authentication with new token');
-            socketInstance.auth.token = newTokens.access_token;
-            socketInstance.auth.userId = newTokens.userId;
-            }
-          } catch (error) {
-            logger.error('Error updating socket token:', error);
+        // Set up connection handlers
+        socketInstance.on('connect', () => {
+          logger.info('Socket connected successfully');
+          socketState.state = SOCKET_STATES.CONNECTED;
+          socketState.authenticated = true;
+          socketState.error = null;
+          socketState.retryCount = 0;
+          socketState.lastActivity = Date.now();
+        });
+
+        socketInstance.on('connect_error', (error) => {
+          logger.error('Socket connection error:', error);
+          socketState.state = SOCKET_STATES.ERROR;
+          socketState.error = error;
+          socketState.retryCount++;
+
+          if (socketState.retryCount >= maxRetries) {
+            reject(new Error('Max reconnection attempts reached'));
           }
         });
 
-        // Store unsubscribe function for cleanup
-        socketInstance._tokenUnsubscribe = unsubscribe;
+        socketInstance.on('disconnect', (reason) => {
+          logger.warn('Socket disconnected:', reason);
+          socketState.state = SOCKET_STATES.DISCONNECTED;
+          socketState.authenticated = false;
 
-        // Set up listeners before connecting
-        setupSocketListeners(socketInstance, { ...options, unsubscribe }, resolve, reject);
+          if (reason === 'io server disconnect') {
+            // Server initiated disconnect, attempt reconnection
+            socketInstance.connect();
+          }
+        });
 
-        // Now connect
-        socketInstance.connect();
+        // Set up heartbeat
+        const heartbeatInterval = setInterval(() => {
+          if (socketInstance?.connected) {
+            socketInstance.emit('heartbeat');
+            socketState.lastHeartbeat = Date.now();
+          }
+        }, 30000);
 
+        // Clean up on window unload
+        window.addEventListener('beforeunload', () => {
+          clearInterval(heartbeatInterval);
+          cleanupSocket();
+        });
+
+        // Wait for initial connection
+        await new Promise((resolveConnection, rejectConnection) => {
+          const timeout = setTimeout(() => {
+            rejectConnection(new Error('Connection timeout'));
+          }, CONNECTION_CONFIG.CONNECTION_TIMEOUT);
+
+          socketInstance.once('connect', () => {
+            clearTimeout(timeout);
+            resolveConnection();
+          });
+        });
+
+        resolve(socketInstance);
       } catch (error) {
         logger.error('Socket initialization error:', error);
+        socketState.state = SOCKET_STATES.ERROR;
+        socketState.error = error;
         reject(error);
       }
     });
 
     return await connectionPromise;
   } catch (error) {
-    logger.error('Socket initialization failed:', error);
+    logger.error('Fatal socket initialization error:', error);
     throw error;
   } finally {
     connectionAttemptInProgress = false;
@@ -715,6 +756,6 @@ class SocketManager {
 }
 
 // Create singleton instance
-const socketManager = new SocketManager();
+const socketManager = new SocketManager(); 
 
 export default socketManager; 

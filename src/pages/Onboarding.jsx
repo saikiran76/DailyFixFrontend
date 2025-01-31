@@ -261,7 +261,7 @@ const PlatformSelectionStep = ({ onNext }) => {
       }
       
       // Initiate platform connection
-      const response = await api.post(`http://localhost:3001/connect/${platform.id}/initiate`, requestData);
+      const response = await api.post(`http://localhost:3002/connect/${platform.id}/initiate`, requestData);
       console.log('Platform initiation response:', response.data);
 
       // Dismiss loading toast
@@ -590,7 +590,7 @@ const Onboarding = () => {
       case ONBOARDING_STEPS.INITIAL:
         return <WelcomeStep onNext={handleStepChange} />;
       case ONBOARDING_STEPS.PROTOCOL_SELECTION:
-        return <ProtocolSelectionStep onNext={() => handleStepChange(ONBOARDING_STEPS.MATRIX)} />;
+        return <ProtocolSelection onNext={() => handleStepChange(ONBOARDING_STEPS.MATRIX)} />;
       case ONBOARDING_STEPS.MATRIX:
         return <MatrixSetupStep onNext={() => handleStepChange(ONBOARDING_STEPS.WHATSAPP)} />;
       case ONBOARDING_STEPS.WHATSAPP:

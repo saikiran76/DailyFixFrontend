@@ -3,6 +3,7 @@ import { authReducer } from './slices/authSlice';
 import onboardingReducer from './slices/onboardingSlice';
 import { progressReducer } from './slices/progressSlice';
 import { contactReducer } from './slices/contactSlice';
+import { messageReducer } from './slices/messageSlice';
 import socketReducer from './slices/socketSlice';
 import logger from '../utils/logger';
 import { tokenManager } from '../utils/tokenManager';
@@ -80,13 +81,14 @@ const store = configureStore({
     onboarding: onboardingReducer,
     progress: progressReducer,
     contacts: contactReducer,
+    messages: messageReducer,
     socket: socketReducer
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {
         ignoredActions: ['socket/error', 'auth/setSession'],
-        ignoredPaths: ['auth.session', 'socket.instance']
+        ignoredPaths: ['auth.session', 'socket.instance', 'messages.items']
       }
     })
     .concat(authMiddleware)

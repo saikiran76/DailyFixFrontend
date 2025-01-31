@@ -127,6 +127,19 @@ class TokenService {
       return false;
     }
   }
+
+  async getValidTokens() {
+    try {
+      const tokenData = await this.getValidToken();
+      return {
+        accessToken: tokenData.access_token,
+        userId: tokenData.userId
+      };
+    } catch (error) {
+      logger.error('Failed to get valid tokens:', error);
+      throw error;
+    }
+  }
 }
 
 export const tokenService = new TokenService();

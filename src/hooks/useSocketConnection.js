@@ -4,7 +4,7 @@ import { supabase } from '../utils/supabase';
 import { toast } from 'react-toastify';
 import logger from '../utils/logger';
 
-const SOCKET_SERVER = import.meta.env.VITE_WS_URL || 'http://localhost:3001';
+const SOCKET_SERVER = import.meta.env.VITE_WS_URL || 'http://localhost:3002';
 
 const CONNECTION_CONFIG = {
   MAX_RECONNECT_ATTEMPTS: 3,

@@ -8,11 +8,15 @@ export const fetchContacts = createAsyncThunk(
   async (userId, { rejectWithValue }) => {
     try {
       logger.info('[Contacts] Fetching contacts for user:', userId);
-      const contacts = userId ? 
-        await contactService.getUserContacts(userId) :
-        await contactService.getCurrentUserContacts();
-      logger.info('[Contacts] Fetched contacts:', contacts.length);
-      return contacts;
+      const result = await contactService.getCurrentUserContacts();
+      
+      // Handle in-progress sync case
+      if (result.inProgress) {
+        return { inProgress: true, contacts: [] };
+      }
+      
+      logger.info('[Contacts] Fetched contacts:', result.contacts?.length);
+      return { contacts: result.contacts || [] };
     } catch (error) {
       logger.info('[Contacts] Failed to fetch contacts:', error);
       return rejectWithValue(error.message);
@@ -33,18 +37,18 @@ export const syncContact = createAsyncThunk(
   }
 );
 
-export const updateContactStatus = createAsyncThunk(
-  'contacts/updateStatus',
-  async ({ contactId, status }, { rejectWithValue }) => {
-    try {
-      const result = await contactService.updateContactStatus(contactId, status);
-      return result;
-    } catch (error) {
-      logger.info('[ContactSlice] Failed to update contact status:', error);
-      return rejectWithValue(error.message);
-    }
-  }
-);
+// export const updateContactStatus = createAsyncThunk(
+//   'contacts/updateStatus',
+//   async ({ contactId, status }, { rejectWithValue }) => {
+//     try {
+//       const result = await contactService.updateContactStatus(contactId, status);
+//       return result;
+//     } catch (error) {
+//       logger.info('[ContactSlice] Failed to update contact status:', error);
+//       return rejectWithValue(error.message);
+//     }
+//   }
+// );
 
 // Slice definition
 const contactSlice = createSlice({
@@ -57,7 +61,8 @@ const contactSlice = createSlice({
       inProgress: false,
       lastSyncTime: null,
       error: null
-    }
+    },
+    initialLoadComplete: false
   },
   reducers: {
     clearContactError: (state) => {
@@ -73,6 +78,19 @@ const contactSlice = createSlice({
         lastSyncTime: null,
         error: null
       };
+      state.initialLoadComplete = false;
+    },
+    updateContactMembership: (state, action) => {
+      const { contactId, updatedContact } = action.payload;
+      const contactIndex = state.items.findIndex(c => c.id === contactId);
+      if (contactIndex !== -1) {
+        logger.info('[ContactSlice] Updating contact membership:', {
+          contactId,
+          oldMembership: state.items[contactIndex].metadata?.membership,
+          newMembership: updatedContact.metadata?.membership
+        });
+        state.items[contactIndex] = updatedContact;
+      }
     }
   },
   extraReducers: (builder) => {
@@ -85,12 +103,34 @@ const contactSlice = createSlice({
       })
       .addCase(fetchContacts.fulfilled, (state, action) => {
         state.loading = false;
-        state.items = action.payload;
-        logger.info('[Contacts] Contacts fetch successful:', action.payload.length);
+        
+        if (action.payload.inProgress) {
+          state.syncStatus.inProgress = true;
+          if (!state.items.length) {
+            state.items = [];
+          }
+        } else {
+          state.items = action.payload.contacts.map(contact => ({
+            ...contact,
+            metadata: {
+              ...contact.metadata,
+              membership: contact.metadata?.membership || 'join'
+            }
+          }));
+          state.syncStatus.inProgress = false;
+          state.syncStatus.lastSyncTime = Date.now();
+        }
+        
+        state.initialLoadComplete = true;
+        logger.info('[Contacts] Contacts fetch successful:', {
+          count: state.items.length,
+          hasMetadata: state.items.some(item => item.metadata?.membership)
+        });
       })
       .addCase(fetchContacts.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload || 'Failed to fetch contacts';
+        state.initialLoadComplete = true;
         logger.info('[Contacts] Contacts fetch failed:', action.payload);
       })
       // Sync contacts
@@ -101,27 +141,25 @@ const contactSlice = createSlice({
       .addCase(syncContact.fulfilled, (state, action) => {
         state.syncStatus.inProgress = false;
         state.syncStatus.lastSyncTime = Date.now();
-        state.items = action.payload.contacts || state.items;
+        if (action.payload.contacts) {
+          state.items = action.payload.contacts;
+        }
       })
       .addCase(syncContact.rejected, (state, action) => {
         state.syncStatus.inProgress = false;
         state.syncStatus.error = action.payload || 'Failed to sync contacts';
-      })
-      // Update contact status
-      .addCase(updateContactStatus.fulfilled, (state, action) => {
-        const updatedContact = action.payload;
-        const index = state.items.findIndex(contact => contact.id === updatedContact.id);
-        if (index !== -1) {
-          state.items[index] = updatedContact;
-        }
       });
   }
 });
 
 // Export actions
-export const { clearContactError, clearContacts } = contactSlice.actions;
+export const { 
+  clearContactError, 
+  clearContacts,
+  updateContactMembership 
+} = contactSlice.actions;
 
-// Export reducer as named export to match store's import
+// Export reducer
 export const contactReducer = contactSlice.reducer;
 
 // Selectors
@@ -132,4 +170,5 @@ export const selectSyncStatus = (state) => state.contacts.syncStatus;
 export const selectContactsLoading = (state) => state.contacts.loading;
 export const selectContactsError = (state) => state.contacts.error;
 export const selectLastSyncTime = (state) => state.contacts.syncStatus.lastSyncTime;
-export const selectIsSyncing = (state) => state.contacts.syncStatus.inProgress; 
+export const selectIsSyncing = (state) => state.contacts.syncStatus.inProgress;
+export const selectInitialLoadComplete = (state) => state.contacts.initialLoadComplete; 
