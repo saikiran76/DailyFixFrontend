@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useSocketConnection } from './useSocketConnection';
 import { PLATFORM_CONFIGS } from '../constants/platforms';
-import api from '../utils/axios';
+import api from '../utils/api';
 import { toast } from 'react-hot-toast';
 
 export const usePlatformConnection = (platform) => {

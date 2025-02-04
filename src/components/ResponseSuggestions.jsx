@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from '../utils/axios';
+import axios from 'axios';
 
 const ResponseSuggestions = ({ message, onSelectSuggestion }) => {
   const [suggestions, setSuggestions] = useState([]);

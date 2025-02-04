@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { getSocket, initializeSocket } from '../utils/socket';
+import socketManager from '../utils/socket';
 import toast from 'react-hot-toast';
 
 const TopNavPanel = () => {
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
-    const socket = getSocket();
+    const socket = socketManager.socket;
     if (socket) {
       // Listen for sync completion
       socket.on('sync_complete', () => {
@@ -34,7 +34,7 @@ const TopNavPanel = () => {
       setIsSyncing(true);
       toast.loading('Syncing...', { id: 'sync' });
       
-      const socket = await initializeSocket({
+      const socket = await socketManager.connect({
         onError: (error) => {
           setIsSyncing(false);
           toast.error(error.message || 'Failed to connect');

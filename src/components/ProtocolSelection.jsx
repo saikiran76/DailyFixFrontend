@@ -1,29 +1,42 @@
 import React from 'react';
+import { useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { updateOnboardingStep, ONBOARDING_STEPS, ONBOARDING_ROUTES, PLATFORMS } from '../store/slices/onboardingSlice';
 import { toast } from 'react-hot-toast';
+import logger from '../utils/logger';
 
-const ProtocolSelection = ({ onNext, onDirectSelect }) => {
+const ProtocolSelection = () => {
   const navigate = useNavigate();
-  const { updateOnboardingStep } = useAuth();
+  const dispatch = useDispatch();
 
   const handleMatrixSelection = async () => {
     try {
-      await updateOnboardingStep('matrix_setup');
-      navigate('/onboarding/matrix-setup');
-    } catch (error) {
-      console.error('Error updating onboarding step:', error);
-      toast.error('Failed to proceed. Please try again.');
-    }
-  };
+      logger.info('[ProtocolSelection] Selected Matrix protocol');
+      
+      // Validate Matrix server availability first
+      try {
+        const response = await fetch('https://example-mtbr.duckdns.org/_matrix/client/versions');
+        if (!response.ok) {
+          throw new Error('Matrix server is not responding. Please try again later.');
+        }
+      } catch (error) {
+        logger.error('[ProtocolSelection] Matrix server check failed:', error);
+        toast.error('Unable to connect to Matrix server. Please check your internet connection and try again.');
+        return;
+      }
 
-  const handleDirectSelection = async () => {
-    try {
-      await updateOnboardingStep('platform_selection');
-      navigate('/onboarding/platform-selection');
+      await dispatch(updateOnboardingStep({ 
+        step: ONBOARDING_STEPS.MATRIX,
+        data: { selectedProtocol: PLATFORMS.MATRIX.id }
+      })).unwrap();
+      
+      navigate(ONBOARDING_ROUTES.MATRIX);
     } catch (error) {
-      console.error('Error updating onboarding step:', error);
-      toast.error('Failed to proceed. Please try again.');
+      logger.error('[ProtocolSelection] Error updating onboarding step:', error);
+      const errorMessage = error.response?.data?.message || 
+                          error.message || 
+                          'Failed to proceed. Please try again.';
+      toast.error(errorMessage);
     }
   };
 
@@ -41,7 +54,7 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
             className="w-full p-6 border border-gray-700 rounded-lg bg-dark-lighter hover:bg-dark/50 transition-colors text-left relative group"
           >
             <div className="absolute top-4 right-4 bg-green-500/20 text-green-500 px-3 py-1 rounded-full text-sm">
-              Available
+              Available and Recommended
             </div>
             
             <h3 className="text-xl font-semibold text-gray-400 mb-2 flex items-center">
@@ -52,42 +65,40 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
             
             <p className="text-gray-500 text-sm">
               Connect using the decentralized Matrix protocol for enhanced security and interoperability.
-              Supports WhatsApp bridging.
+              Required for WhatsApp integration.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">WhatsApp</span>
+              <span className="px-2 py-1 bg-dark rounded text-xs text-green-400">Matrix</span>
+              <span className="px-2 py-1 bg-dark rounded text-xs text-green-400">WhatsApp</span>
               <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400 opacity-50">Telegram (Coming Soon)</span>
               <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400 opacity-50">Discord (Coming Soon)</span>
             </div>
           </button>
         </div>
 
-        {/* Direct API Option */}
-        <div className="relative">
+        {/* Direct API Option - Disabled */}
+        <div className="relative opacity-50">
           <button
-            onClick={handleDirectSelection}
-            className="w-full p-6 border border-primary rounded-lg bg-dark-lighter hover:bg-primary/10 transition-colors text-left group"
+            disabled
+            className="w-full p-6 border border-gray-700 rounded-lg bg-dark-lighter text-left cursor-not-allowed"
           >
-            <div className="absolute top-4 right-4 bg-green-500/20 text-green-500 px-3 py-1 rounded-full text-sm">
-              Recommended
+            <div className="absolute top-4 right-4 bg-yellow-500/20 text-yellow-500 px-3 py-1 rounded-full text-sm">
+              Coming Soon
             </div>
             
-            <h3 className="text-xl font-semibold text-white mb-2 flex items-center">
+            <h3 className="text-xl font-semibold text-gray-400 mb-2 flex items-center">
               <span className="text-2xl mr-3">⚡</span>
               Direct API Connection
-              <span className="ml-2 text-sm font-normal">(Fast & Reliable)</span>
+              <span className="ml-2 text-sm font-normal">(Limited Access)</span>
             </h3>
             
-            <p className="text-gray-400 text-sm">
+            <p className="text-gray-500 text-sm">
               Connect directly to messaging platforms using their official APIs.
-              Recommended for immediate deployment.
+              Limited functionality, no access to messages or contacts.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">WhatsApp</span>
-              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">Telegram</span>
-              <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">Slack</span>
               <span className="px-2 py-1 bg-dark rounded text-xs text-gray-400">Discord</span>
             </div>
           </button>
@@ -96,8 +107,8 @@ const ProtocolSelection = ({ onNext, onDirectSelect }) => {
 
       <div className="mt-8 text-center">
         <p className="text-sm text-gray-500">
-          Both options provide seamless integration with your favorite messaging platforms.
-          Choose Direct API Connection for immediate access.
+          Matrix Protocol is required for full functionality including WhatsApp integration.
+          Direct API connections will be available in future updates.
         </p>
       </div>
     </div>

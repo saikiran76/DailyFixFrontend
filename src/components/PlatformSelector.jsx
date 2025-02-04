@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import api from '../utils/axios.js';
+import api from '../utils/api.js';
 import { toast } from 'react-hot-toast';
 import LoadingSpinner from './LoadingSpinner';
 

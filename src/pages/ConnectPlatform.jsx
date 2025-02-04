@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import api from '../utils/axios.js';
+import api from '../utils/api.js';
 import { toast } from 'react-hot-toast';
 import PlatformSelector from '../components/PlatformSelector';
 import supabase from '../utils/supabase.js';
 import { initializeSocket, disconnectSocket } from '../utils/socket';
-import { useAuth } from '../contexts/AuthContext';
+import { useSelector } from 'react-redux';
+import logger from '../utils/logger';
 
 const ConnectPlatform = () => {
-  const { session } = useAuth();
-  const { platform } = useParams();
   const navigate = useNavigate();
+  const session = useSelector(state => state.auth.session);
+  const { platform } = useParams();
   const [status, setStatus] = useState('initializing');
   const [qrCode, setQrCode] = useState(null);
   const [requiresToken, setRequiresToken] = useState(false);
@@ -31,12 +32,12 @@ const ConnectPlatform = () => {
   const [telegramToken, setTelegramToken] = useState('');
 
   useEffect(() => {
-    console.log('Session state on component mount:', session);
     if (!session) {
+      logger.warn('[ConnectPlatform] No session found, redirecting to login');
       navigate('/login');
       return;
     }
-    
+
     if (platform) {
       initializeConnection();
     }
@@ -400,6 +401,20 @@ const ConnectPlatform = () => {
       console.error(error);
     }
   };
+
+  if (status === 'select_bridge' || status === 'connecting') {
+    return (
+      <div className="min-h-screen bg-dark flex items-center justify-center p-8">
+        {status === 'select_bridge' ? (
+          renderBridgeSelection()
+        ) : status === 'connecting' ? (
+          <div className="text-white">Connecting...</div>
+        ) : (
+          <div className="text-red-500">{errorMessage}</div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-dark flex items-center justify-center p-8">

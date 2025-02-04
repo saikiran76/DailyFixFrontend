@@ -1,703 +1,661 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { FiVideo, FiPhone, FiSearch, FiFile, FiWifi, FiWifiOff, FiMoreVertical, FiX, FiFileText } from 'react-icons/fi';
 import api from '../utils/api';
 import { toast } from 'react-hot-toast';
-import { useAuth } from '../contexts/AuthContext';
+import { useSelector, useDispatch } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../utils/supabase';
+import logger from '../utils/logger';
+import { MessageBatchProcessor } from '../utils/MessageBatchProcessor';
 import { debounce } from 'lodash';
+import { ErrorBoundary } from 'react-error-boundary';
+import { useSocket } from '../hooks/useSocket';
+import LoadingSpinner from './LoadingSpinner';
+import InviteAcceptanceModal from './InviteAcceptanceModal';
+import MessageItem from './MessageItem';
+import {
+  fetchMessages,
+  sendMessage,
+  markMessagesAsRead,
+  clearMessages,
+  addToMessageQueue,
+  updateMessageStatus,
+  selectMessages,
+  selectMessageLoading,
+  selectMessageError,
+  selectHasMoreMessages,
+  selectCurrentPage,
+  selectMessageQueue,
+  selectUnreadMessageIds
+} from '../store/slices/messageSlice';
+import { updateContactMembership } from '../store/slices/contactSlice';
 
-const ChatView = ({ selectedContact }) => {
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected');
-  const [hasMoreMessages, setHasMoreMessages] = useState(true);
-  const [page, setPage] = useState(1);
-  const [messageQueue, setMessageQueue] = useState([]);
+// Import environment variables
+const API_URL = import.meta.env.VITE_API_URL;
+
+const ERROR_MESSAGES = {
+  NETWORK_ERROR: 'Connection lost. Retrying...',
+  AUTH_ERROR: 'Authentication failed. Please try logging in again.',
+  RATE_LIMIT: 'Too many requests. Waiting before retry...',
+  VALIDATION_ERROR: 'Invalid data received. Please refresh the page.',
+  SYNC_ERROR: 'Error syncing messages. Retrying...',
+  UNKNOWN_ERROR: 'An unexpected error occurred. Retrying...'
+};
+
+// Update sync states to match database constraints
+const SYNC_STATES = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected'
+};
+
+const SYNC_STATUS_MESSAGES = {
+  [SYNC_STATES.PENDING]: 'Waiting for sync approval...',
+  [SYNC_STATES.APPROVED]: 'Sync in progress...',
+  [SYNC_STATES.REJECTED]: 'Sync request rejected'
+};
+
+const INITIAL_SYNC_STATE = {
+  state: SYNC_STATES.PENDING,
+  progress: 0,
+  details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING],
+  processedMessages: 0,
+  totalMessages: 0,
+  errors: []
+};
+
+const SyncProgressIndicator = ({ syncState }) => {
+  if (!syncState || syncState.state === SYNC_STATES.PENDING) return null;
+
+  const getStatusColor = () => {
+    switch (syncState.state) {
+      case SYNC_STATES.APPROVED:
+        return 'bg-[#1e6853]';
+      case SYNC_STATES.REJECTED:
+        return 'bg-red-500';
+      default:
+        return 'bg-yellow-500';
+    }
+  };
+
+  return (
+    <div className="absolute top-0 left-0 right-0 z-10">
+      <div className="flex flex-col space-y-2 p-4 bg-[#24283b] rounded-lg shadow-lg m-4">
+        <div className="flex justify-between text-sm text-gray-400">
+          <span>{syncState.details}</span>
+          {syncState.state === SYNC_STATES.APPROVED && (
+            <span>{syncState.processedMessages} / {syncState.totalMessages} messages</span>
+          )}
+        </div>
+        <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+          <div 
+            className={`h-full transition-all duration-300 ease-out ${getStatusColor()}`}
+            style={{ 
+              width: `${syncState.progress}%`,
+              transition: 'width 0.3s ease-out'
+            }}
+          />
+        </div>
+        {syncState.state === SYNC_STATES.REJECTED && syncState.errors.length > 0 && (
+          <div className="text-xs text-red-400 mt-1">
+            {syncState.errors[syncState.errors.length - 1].message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const handleSyncError = (error, contactId) => {
+  const errorMessage = error?.response?.data?.message || error?.message || 'An unknown error occurred';
+  
+  setSyncState(prev => ({
+    ...prev,
+    state: SYNC_STATES.REJECTED,
+    errors: [...prev.errors, {
+      message: errorMessage,
+      timestamp: Date.now()
+    }]
+  }));
+
+  setError(`Message sync failed: ${errorMessage}`);
+  
+  console.error('[ChatView] Sync error:', {
+    contactId,
+    error: errorMessage,
+    timestamp: new Date().toISOString()
+  });
+};
+
+const ErrorFallback = ({ error }) => {
+  return (
+    <div className="flex flex-col items-center justify-center h-full p-4">
+      <div className="text-red-500 mb-4">Error loading chat</div>
+      <div className="text-sm text-gray-600">{error.message}</div>
+    </div>
+  );
+};
+
+// Constants at the top
+const CONNECTION_STATUS = {
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  CONNECTING: 'connecting'
+};
+
+const ChatView = ({ selectedContact, onContactUpdate }) => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const currentUser = useSelector(state => state.auth.session?.user);
+  const { socket, isConnected } = useSocketConnection('whatsapp');
+
+  // Redux message selectors
+  const messagesState = useSelector(state => state.messages);
+  const messages = useSelector(state => selectMessages(state, selectedContact?.id) || []);
+  const loading = useSelector(state => selectMessageLoading(state) || false);
+  const error = useSelector(state => selectMessageError(state) || null);
+  const hasMoreMessages = useSelector(state => selectHasMoreMessages(state) || false);
+  const currentPage = useSelector(state => selectCurrentPage(state) || 0);
+  const messageQueue = useSelector(state => selectMessageQueue(state) || []);
+  const unreadMessageIds = useSelector(state => selectUnreadMessageIds(state) || []);
+
+  // Local state
+  const [connectionStatus, setConnectionStatus] = useState(CONNECTION_STATUS.DISCONNECTED);
+  const [priorityRetries, setPriorityRetries] = useState(0);
+  const [socketState, setSocketState] = useState({
+    isConnecting: false,
+    retries: 0,
+    lastError: null
+  });
   const [previewMedia, setPreviewMedia] = useState(null);
   const [priority, setPriority] = useState(null);
   const [showSummary, setShowSummary] = useState(false);
   const [summary, setSummary] = useState(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [initializingPriority, setInitializingPriority] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [pendingSyncs, setPendingSyncs] = useState(new Set());
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [socketReady, setSocketReady] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [summaryData, setSummaryData] = useState(null);
+  const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
+
+  // Refs
+  const syncAbortController = useRef(null);
+  const lastSyncRequest = useRef(null);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
-  const { socket, isConnected } = useSocketConnection('whatsapp');
-  const { user: currentUser } = useAuth();
+  const messageCache = useRef(new Map());
+  const isMounted = useRef(true);
+  const batchProcessorRef = useRef(null);
+  const offlineTimeoutRef = useRef(null);
+  const lastSyncRef = useRef(null);
+  const syncTimeoutRef = useRef(null);
+
+  // Constants
   const PAGE_SIZE = 30;
-  const [unreadMessageIds, setUnreadMessageIds] = useState(new Set());
-  const [initializingPriority, setInitializingPriority] = useState(false);
+  const MAX_RETRIES = 3;
+  const RETRY_COOLDOWN = 5000;
 
-  // Connection status management
-  useEffect(() => {
-    if (!socket) {
-      setConnectionStatus('disconnected');
-      return;
-    }
-
-    const handleConnect = () => {
-      setConnectionStatus('connected');
-      // Process queued messages when connection is restored
-      processMessageQueue();
-    };
-
-    const handleDisconnect = () => {
-      setConnectionStatus('disconnected');
-    };
-
-    const handleConnectError = () => {
-      setConnectionStatus('error');
-    };
-
-    socket.on('connect', handleConnect);
-    socket.on('disconnect', handleDisconnect);
-    socket.on('connect_error', handleConnectError);
-
-    return () => {
-      socket.off('connect', handleConnect);
-      socket.off('disconnect', handleDisconnect);
-      socket.off('connect_error', handleConnectError);
-    };
-  }, [socket]);
-
-  // Process message queue
-  const processMessageQueue = useCallback(async () => {
-    if (!selectedContact?.id) {
-      console.log('Skipping message queue - no contact selected');
-      return;
-    }
-
-    if (!socket || !isConnected) {
-      console.log('Skipping message queue - socket not ready');
-      return;
-    }
-
-    if (messageQueue.length === 0) {
-      console.log('Message queue is empty');
-      return;
-    }
-
-    console.log('Processing message queue for contact:', selectedContact.id);
-    const queue = [...messageQueue];
-    setMessageQueue([]);
-
-    for (const queuedMessage of queue) {
-      try {
-        const response = await api.post(
-          `/api/whatsapp-entities/send-message/${selectedContact.id}`,
-          queuedMessage
-        );
-        if (response.data.status !== 'success') {
-          throw new Error(response.data.message);
-        }
-      } catch (error) {
-        console.error('Failed to send queued message:', error);
-        setMessageQueue(prev => [...prev, queuedMessage]);
-        toast.error('Some messages failed to send');
-        break;
-      }
-    }
-  }, [socket, isConnected, selectedContact, messageQueue]);
-
-  // Add this function to mark messages as read
-  const markMessagesAsRead = useCallback(
-    debounce(async (messageIds) => {
-      if (!selectedContact?.id || messageIds.length === 0) return;
-
-      try {
-        await api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/messages/read`, {
-          messageIds: Array.from(messageIds)
-        });
-        
-        // Clear the unread messages set after successful marking
-        setUnreadMessageIds(new Set());
-        
-        // Emit socket event to update contact list
-        if (socket && isConnected) {
-          socket.emit('whatsapp:messages_read', {
-            contactId: selectedContact.whatsapp_id
-          });
-        }
-      } catch (error) {
-        console.error('Error marking messages as read:', error);
-      }
-    }, 1000),
-    [selectedContact, socket, isConnected]
-  );
-
-  // Enhanced fetchMessages with pagination
-  const fetchMessages = async (selectedContact, page = 1) => {
-    console.log('[ChatView] Starting fetchMessages:', {
-      contactId: selectedContact?.id,
-      whatsappId: selectedContact?.whatsapp_id,
-      page,
-      currentMessagesCount: messages.length
-    });
-    
-    if (!selectedContact?.id) {
-      console.error('[ChatView] No valid contact ID found:', selectedContact);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Calculate before timestamp based on page and existing messages
-      const before = page > 1 && messages.length > 0 ? messages[0]?.timestamp : undefined;
-      
-      const params = {
-        limit: PAGE_SIZE,
-        ...(before && { before })
-      };
-      
-      const url = `/api/whatsapp-entities/contacts/${selectedContact.id}/messages`;
-      console.log('[ChatView] Making API request:', {
-        method: 'GET',
-        url,
-        params,
-        baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
-      });
-
-      const response = await api.get(url, { params });
-      
-      console.log('[ChatView] API Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-        data: response.data
-      });
-
-      if (!response.data || !Array.isArray(response.data.data.messages)) {
-        console.error('[ChatView] Invalid response format:', response.data);
-        throw new Error('Invalid response format from server');
-      }
-
-      const newMessages = response.data.data.messages;
-      
-      if (newMessages.length > 0) {
-        console.log('[ChatView] Processed new messages:', {
-          count: newMessages.length,
-          firstMessageTime: newMessages[0]?.timestamp,
-          lastMessageTime: newMessages[newMessages.length - 1]?.timestamp
-        });
-        
-        // Collect unread message IDs
-        const unreadIds = newMessages
-          .filter(msg => msg && !msg.is_read && msg.sender_id !== currentUser?.id)
-          .map(msg => msg.message_id)
-          .filter(Boolean); // Filter out any undefined message_ids
-        
-        if (unreadIds.length > 0) {
-          console.log('[ChatView] Found unread messages:', {
-            count: unreadIds.length,
-            messageIds: unreadIds
-          });
-          setUnreadMessageIds(prev => new Set([...prev, ...unreadIds]));
-        }
-
-        setMessages(prev => {
-          const updated = page === 1 ? newMessages : [...newMessages, ...prev];
-          console.log('[ChatView] Updated messages state:', {
-            previousCount: prev.length,
-            newCount: updated.length,
-            addedCount: newMessages.length
-          });
-          return updated;
-        });
-      } else {
-        console.log('[ChatView] No new messages received');
-      }
-      
-      setHasMoreMessages(newMessages.length === PAGE_SIZE);
-      setError(null);
-    } catch (error) {
-      console.error('[ChatView] Error fetching messages:', {
-        error,
-        stack: error.stack,
-        response: error.response?.data
-      });
-      setError('Failed to load messages');
-      toast.error('Failed to load messages. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Infinite scroll handler
-  const handleScroll = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container || loading || !hasMoreMessages) return;
-
-    if (container.scrollTop === 0) {
-      setPage(prev => {
-        const nextPage = prev + 1;
-        fetchMessages(selectedContact, nextPage);
-        return nextPage;
-      });
-    }
-  }, [loading, hasMoreMessages, selectedContact]);
-
-  // Media preview handler
-  const handleMediaPreview = (media) => {
-    setPreviewMedia(media);
-  };
-
-  useEffect(() => {
-    if (selectedContact) {
-      console.log('Selected contact changed:', selectedContact);
-      fetchMessages(selectedContact);
-    } else {
-      setMessages([]);
-      setError(null);
-    }
-  }, [selectedContact]);
-
-  // Media URL conversion helper
-  const convertMatrixMediaUrl = useCallback((mxcUrl) => {
-    if (!mxcUrl || !mxcUrl.startsWith('mxc://')) {
-      console.warn('[ChatView] Invalid mxc URL:', mxcUrl);
-      return null;
-    }
-    
-    try {
-    // Extract server and media ID from mxc URL
-      const match = mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/);
-      if (!match) {
-        console.warn('[ChatView] Failed to parse mxc URL:', mxcUrl);
-        return null;
-      }
-
-      const [, serverName, mediaId] = match;
-      if (!serverName || !mediaId) {
-        console.warn('[ChatView] Missing server name or media ID:', { serverName, mediaId });
-        return null;
-      }
-
-      // Convert to HTTP URL using environment variable
-      const baseUrl = import.meta.env.VITE_MATRIX_MEDIA_HANDLER;
-      if (!baseUrl) {
-        console.error('[ChatView] Missing MATRIX_MEDIA_HANDLER environment variable');
-        return null;
-      }
-
-      const mediaUrl = `${baseUrl}/media/r0/download/${serverName}/${mediaId}`;
-      console.log('[ChatView] Converted media URL:', { 
-        original: mxcUrl, 
-        converted: mediaUrl 
-      });
-      return mediaUrl;
-    } catch (error) {
-      console.error('[ChatView] Error converting media URL:', error);
-      return null;
+  // Callbacks
+  const scrollToBottom = useCallback(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, []);
 
-  // Message content renderer
-  const renderMessageContent = useCallback((message) => {
-    if (!message?.content) {
-      console.warn('[ChatView] Empty message content');
-      return null;
-    }
+  const handleMessageSend = useCallback(async (content) => {
+    if (!selectedContact?.id) return;
 
-    try {
-      const content = typeof message.content === 'string' ? JSON.parse(message.content) : message.content;
-      console.log('[ChatView] Rendering message:', { 
-        type: content.msgtype,
-        hasUrl: !!content.url,
-        hasBody: !!content.body 
-      });
-
-      switch (content.msgtype) {
-        case 'm.text':
-          return <p className="text-gray-800 break-words">{content.body}</p>;
-          
-        case 'm.image':
-          const imageUrl = convertMatrixMediaUrl(content.url);
-          if (!imageUrl) return <p className="text-red-500">Failed to load image</p>;
-          return (
-            <img 
-              src={imageUrl}
-              alt={content.body || 'Image'}
-              className="max-w-[300px] max-h-[300px] rounded cursor-pointer"
-              onClick={() => handleMediaPreview({ type: 'image', url: imageUrl })}
-              onError={(e) => {
-                console.error('[ChatView] Image load error:', e);
-                e.target.src = '/placeholder-image.png';
-              }}
-            />
-          );
-          
-        case 'm.video':
-          const videoUrl = convertMatrixMediaUrl(content.url);
-          const thumbnailUrl = content.info?.thumbnail_url ? 
-            convertMatrixMediaUrl(content.info.thumbnail_url) : null;
-          
-          if (!videoUrl) return <p className="text-red-500">Failed to load video</p>;
-          
-          return (
-            <video 
-              src={videoUrl}
-              poster={thumbnailUrl}
-              controls
-              className="max-w-[300px] max-h-[300px] rounded"
-              onError={(e) => {
-                console.error('[ChatView] Video load error:', e);
-                e.target.closest('.message').classList.add('media-error');
-              }}
-            >
-              <source src={videoUrl} type={content.info?.mimetype || 'video/mp4'} />
-              Your browser does not support the video tag.
-            </video>
-          );
-        
-        case 'm.audio':
-          const audioUrl = convertMatrixMediaUrl(content.url);
-          if (!audioUrl) return <p className="text-red-500">Failed to load audio</p>;
-          return (
-            <audio
-              src={audioUrl}
-              controls
-              className="max-w-[300px]"
-              onError={(e) => console.error('[ChatView] Audio load error:', e)}
-            >
-              <source src={audioUrl} type={content.info?.mimetype || 'audio/mpeg'} />
-              Your browser does not support the audio tag.
-            </audio>
-          );
-        
-        case 'm.file':
-          const fileUrl = convertMatrixMediaUrl(content.url);
-          if (!fileUrl) return <p className="text-red-500">Failed to load file</p>;
-        return (
-          <a 
-              href={fileUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-              className="flex items-center space-x-2 text-blue-500 hover:text-blue-700"
-          >
-              <FiFile className="w-5 h-5" />
-              <span>{content.body || 'Download file'}</span>
-          </a>
-        );
-      
-      default:
-          console.warn('[ChatView] Unsupported message type:', content.msgtype);
-          return <p className="text-gray-500">Unsupported message type: {content.msgtype}</p>;
-      }
-    } catch (error) {
-      console.error('[ChatView] Error rendering message content:', error);
-      return <p className="text-red-500">Error displaying message</p>;
-    }
-  }, [convertMatrixMediaUrl, handleMediaPreview]);
-
-  useEffect(() => {
-    if (socket) {
-      const handleNewMessage = (message) => {
-        console.log('[ChatView] New message received:', message);
-        if (message.contact_id === selectedContact?.id) {
-          setMessages(prev => {
-            // Check if message already exists
-            if (prev.some(m => m.message_id === message.message_id)) {
-              return prev;
-            }
-            const updated = [...prev, message].sort((a, b) => 
-              new Date(b.timestamp) - new Date(a.timestamp)
-            );
-            return updated;
-          });
-          
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-          
-          // Mark new message as read if it's not from current user
-          if (message.sender_id !== currentUser?.id) {
-          try {
-              markMessagesAsRead([message.message_id]);
-          } catch (error) {
-              console.error('[ChatView] Error marking new message as read:', error);
-            }
-          }
-        }
-      };
-
-      const handleError = (error) => {
-        console.error('[ChatView] Socket error:', error);
-        toast.error('Connection error. Messages might be delayed.');
-      };
-
-      socket.on('whatsapp:message', handleNewMessage);
-      socket.on('error', handleError);
-      
-      return () => {
-        socket.off('whatsapp:message', handleNewMessage);
-        socket.off('error', handleError);
-      };
-    }
-  }, [socket, selectedContact, currentUser, markMessagesAsRead]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(scrollToBottom, [messages]);
-
-  // Add utility function for Matrix message type mapping
-  const getMessageType = (message) => {
-    const matrixType = message.metadata?.raw_event?.content?.msgtype;
-    switch (matrixType) {
-      case 'm.text':
-        return 'text';
-      case 'm.image':
-        return 'image';
-      case 'm.video':
-        return 'video';
-      case 'm.audio':
-        return 'audio';
-      case 'm.file':
-        return 'document';
-      default:
-        // If message_type is already one of our allowed types, use it
-        return ['text', 'image', 'video', 'audio', 'document'].includes(message.message_type) 
-          ? message.message_type 
-          : 'text';
-    }
-  };
-
-  // Add utility function for media URL handling
-  const getMediaUrl = (message) => {
-    const mxcUrl = message.metadata?.raw_event?.content?.url;
-    if (!mxcUrl) return message.content;
+    const message = { content };
     
-    // Convert mxc:// URL to HTTP URL
-    // Format: mxc://example-mtbr.duckdns.org/LJjQUKsAyOAOSCxdTtZxoIwm
-    const [, serverName, mediaId] = mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/);
-    return `https://${serverName}/_matrix/media/r0/download/${serverName}/${mediaId}`;
-  };
-
-  // Message Content Component
-  const MessageContent = ({ message }) => {
-    const messageType = getMessageType(message);
-    const mediaUrl = getMediaUrl(message);
-    const info = message.metadata?.raw_event?.content?.info || {};
-
-    switch (messageType) {
-      case 'text':
-        return <p className="text-white break-words">{message.content}</p>;
-      
-      case 'image':
-        return (
-          <div className="relative">
-            <img 
-              src={mediaUrl}
-              alt={message.content}
-              className="max-w-full rounded-lg"
-              loading="lazy"
-              style={info.w && info.h ? { aspectRatio: `${info.w}/${info.h}` } : undefined}
-            />
-            {message.content && (
-              <span className="text-xs text-gray-400 mt-1 block">
-                {message.content}
-              </span>
-            )}
-          </div>
-        );
-      
-      case 'video':
-        return (
-          <div className="relative">
-            <video 
-              src={mediaUrl}
-              controls
-              className="max-w-full rounded-lg"
-              poster={info.thumbnail_url ? getMediaUrl({ metadata: { raw_event: { content: { url: info.thumbnail_url } } } }) : undefined}
-            >
-              <source src={mediaUrl} type={info.mimetype} />
-            </video>
-            <div className="text-xs text-gray-400 mt-1 flex items-center justify-between">
-              <span>{message.content}</span>
-              {info.duration && (
-                <span>{Math.round(info.duration / 1000)}s</span>
-              )}
-            </div>
-          </div>
-        );
-      
-      case 'audio':
-        return (
-          <div className="relative">
-            <audio 
-              src={mediaUrl}
-              controls
-              className="max-w-full"
-            >
-              <source src={mediaUrl} type={info.mimetype} />
-            </audio>
-            <div className="text-xs text-gray-400 mt-1 flex items-center justify-between">
-              <span>{message.content}</span>
-              {info.duration && (
-                <span>{Math.round(info.duration / 1000)}s</span>
-              )}
-            </div>
-          </div>
-        );
-      
-      case 'document':
-        return (
-          <div className="flex items-center space-x-2">
-            <div className="p-2 bg-gray-700 rounded">
-              <FiFile className="w-6 h-6 text-gray-400" />
-            </div>
-            <div>
-              <a 
-                href={mediaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white hover:underline break-words"
-              >
-                {message.content}
-              </a>
-              {info.size && (
-                <span className="text-xs text-gray-400 block">
-                  {(info.size / (1024 * 1024)).toFixed(1)} MB
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      
-      default:
-        return <p className="text-white break-words">{message.content}</p>;
-    }
-  };
-
-  // Process message queue only when we have a valid contact
-  useEffect(() => {
-    if (!socket || !isConnected) {
-      console.log('Socket not ready for message queue', { hasSocket: !!socket, isConnected });
-      return;
-    }
-
-    if (!selectedContact?.id) {
-      console.log('No contact selected for message queue');
-      return;
-    }
-
-    if (messageQueue.length === 0) {
-      console.log('Message queue is empty');
-      return;
-    }
-
-    console.log('Processing message queue:', {
-      contactId: selectedContact.id,
-      queueLength: messageQueue.length
-    });
-    processMessageQueue();
-  }, [socket, isConnected, selectedContact, messageQueue]);
-
-  // Add effect to mark messages as read when they become visible
-  useEffect(() => {
-    if (unreadMessageIds.size > 0) {
-      markMessagesAsRead(Array.from(unreadMessageIds));
-    }
-  }, [unreadMessageIds, markMessagesAsRead]);
-
-  // Priority initialization
-  const initializePriority = useCallback(async () => {
-    if (!selectedContact?.id) {
-      console.log('[ChatView] No contact selected for priority initialization');
+    if (!socketReady) {
+      dispatch(addToMessageQueue(message));
+      toast.success('Message queued for delivery');
       return;
     }
 
     try {
-      setInitializingPriority(true);
-      // Log the request attempt
-      console.log('[ChatView] Fetching priority for contact:', {
-        contactId: selectedContact.id,
-        whatsappId: selectedContact.whatsapp_id
-      });
-
-      const response = await api.get(`/api/analysis/priority/suggested/${selectedContact.id}`);
-
-      console.log('[ChatView] Priority response:', response.data);
-      
-      if (response.data?.suggestedPriority) {
-        setPriority(response.data.suggestedPriority);
-        if (response.data.wasInitialized) {
-          toast.success('Priority initialized successfully');
-        }
-      } else {
-        console.warn('[ChatView] No priority data in response:', response.data);
-        setPriority(null);
-        toast.error('Failed to initialize priority');
-      }
-    } catch (error) {
-      console.error('[ChatView] Error fetching priority:', error.response || error);
-      setPriority(null);
-      toast.error('Failed to fetch priority');
-    } finally {
-      setInitializingPriority(false);
+      await dispatch(sendMessage({ contactId: selectedContact.id, message })).unwrap();
+      scrollToBottom();
+      } catch (error) {
+      logger.error('[ChatView] Error sending message:', error);
+      dispatch(addToMessageQueue(message));
+      toast.error('Failed to send message, queued for retry');
     }
-  }, [selectedContact]);
+  }, [dispatch, selectedContact?.id, socketReady, scrollToBottom]);
 
-  // Effect for priority initialization
-  useEffect(() => {
-    if (selectedContact?.id) {
-      initializePriority();
-    } else {
-      setPriority(null);
-    }
-  }, [selectedContact, initializePriority]);
+  const handleMarkAsRead = useCallback(
+    debounce((messageIds) => {
+      if (!selectedContact?.id || messageIds.length === 0 || !isMounted.current) return;
+      dispatch(markMessagesAsRead({ contactId: selectedContact.id, messageIds }));
+    }, 1000),
+    [dispatch, selectedContact?.id]
+  );
 
-  // Summary handler
   const handleSummaryClick = async () => {
     if (!selectedContact?.id) {
-      console.log('[ChatView] No contact selected for summary');
+      toast.error('No contact selected for summary');
       return;
     }
 
     if (messages.length === 0) {
-      console.log('[ChatView] No messages available for summary');
       toast.error('No messages available to summarize');
       return;
     }
 
     try {
       setIsSummarizing(true);
-      console.log('[ChatView] Generating summary for contact:', {
-        contactId: selectedContact.id,
+      logger.info('[ChatView] Fetching summary for contact:', {
+          contactId: selectedContact.id,
         messageCount: messages.length
       });
-
+      
       const response = await api.get(`/api/analysis/summary/${selectedContact.id}`);
-      console.log('[ChatView] Raw summary response:', response.data);
-      
-      // Validate response structure
-      if (!response.data || typeof response.data !== 'object') {
-        console.error('[ChatView] Invalid summary response format:', response.data);
-        throw new Error('Invalid summary response format');
-      }
-      
-      // Log the actual response structure
-      console.log('[ChatView] Response structure:', {
-        summary: response.data.summary,
-        messageCount: response.data.messageCount,
-        timespan: response.data.timespan
+
+
+      if (!response.data?.summary) {
+        toast.success('summary: ', response?.data);
+        return;
+    }
+
+      logger.info('[ChatView] Summary received:', {
+      contactId: selectedContact.id,
+        summary: response.data
       });
+
       
-      // Set the summary and show the modal
-      setSummary(response.data);
-      setShowSummary(true);
-      
+      setSummaryData(response.data);
+      setShowSummaryModal(true);
+
     } catch (error) {
-      console.error('[ChatView] Error generating summary:', error);
-      toast.error('Failed to generate summary');
+      logger.error('[ChatView] Error fetching summary:', {
+        error,
+        contactId: selectedContact.id
+      });
+      toast.error('Failed to generate chat summary. Please try again.');
     } finally {
       setIsSummarizing(false);
     }
   };
 
-  // Show empty state when no contact is selected
+  // Add invite handling functions
+  const handleAcceptInvite = useCallback(async () => {
+    if (!selectedContact?.id) return;
+  
+    try {
+      const response = await api.post(
+        `/api/whatsapp-entities/contacts/${selectedContact.id}/accept`
+      );
+  
+      // Check the server response
+      if (response.data?.success) {
+        // success = true
+        if (response.data.joinedBefore) {
+          // Case B: success but joinedBefore = true
+          logger.warn('[ChatView] Contact already joined the room');
+          toast.success('Already joined this room');
+      } else {
+          // Case A: success, joinedBefore = false
+          toast.success('Invite accepted successfully');
+        }
+  
+        // In both success cases (A or B), we want to re-fetch messages
+        setShowInviteModal(false);
+  
+        // Update membership in Redux if needed
+        // (assuming `updatedContact` is returned or we have membership data)
+        const updatedContact = response.data.contact;
+        dispatch(updateContactMembership({
+          contactId: selectedContact.id,
+          updatedContact
+        }));
+        onContactUpdate(updatedContact);
+  
+        // Now fetch the messages
+        dispatch(clearMessages());
+        dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
+      } else {
+        // success = false
+        if (response.data?.joinedBefore) {
+          // This is an unusual scenario, but if it occurs:
+          logger.warn('[ChatView] Contact was joined before but success=false');
+          toast.success('Already joined this room');
+          
+          // Might still want to fetch messages here
+          setShowInviteModal(false);
+          dispatch(clearMessages());
+          dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
+    } else {
+          // Actually a failure
+          const errorMsg = response.data?.message || 'Failed to accept invite';
+          logger.error('[ChatView] Error accepting invite:', { error: errorMsg });
+          toast.error(errorMsg);
+        }
+      }
+    } catch (error) {
+      logger.error('[ChatView] Error accepting invite:', {
+        error,
+        contactId: selectedContact.id
+      });
+      toast.error(error.message || 'Failed to accept invite. Please try again.');
+    }
+  }, [selectedContact, dispatch, onContactUpdate]);
+  
+
+  // const handleRejectInvite = useCallback(async () => {
+  //   if (!selectedContact?.id) return;
+
+  //   try {
+  //     logger.info('[ChatView] Rejecting invite for contact:', {
+  //       contactId: selectedContact.id,
+  //       currentMembership: selectedContact.metadata?.membership
+  //     });
+
+  //     // Make API call to reject invite
+  //     const response = await api.post(`/api/contacts/${selectedContact.id}/reject`);
+      
+  //     if (!response.data?.success) {
+  //       throw new Error('Failed to reject invite');
+  //     }
+
+  //     // Update contact in Redux with new membership
+  //     dispatch(updateContactMembership({
+  //       contactId: selectedContact.id,
+  //       updatedContact: {
+  //         ...selectedContact,
+  //         metadata: {
+  //           ...selectedContact.metadata,
+  //           membership: 'rejected'
+  //         }
+  //       }
+  //     }));
+
+  //     // Close modal
+  //     setShowInviteModal(false);
+
+  //     // Show success message
+  //     toast.success('Invite rejected');
+
+  //     // Update parent component
+  //     onContactUpdate({
+  //       ...selectedContact,
+  //       metadata: {
+  //         ...selectedContact.metadata,
+  //         membership: 'rejected'
+  //       }
+  //     });
+
+  //   } catch (error) {
+  //     logger.error('[ChatView] Error rejecting invite:', error);
+  //     toast.error('Failed to reject invite. Please try again.');
+  //   }
+  // }, [selectedContact, dispatch, onContactUpdate]);
+
+  // Update invite modal effect to check original membership
+  useEffect(() => {
+    if (!selectedContact) return;
+
+    const membership = selectedContact?.membership;
+    logger.info('[ChatView] Checking contact membership:', {
+      contactId: selectedContact.id,
+      membership
+    });
+
+    if (membership === 'invite') {
+      logger.info('[ChatView] Showing invite modal for contact:', {
+        contactId: selectedContact.id,
+        membership
+      });
+      setShowInviteModal(true);
+    } else {
+      setShowInviteModal(false);
+    }
+  }, [selectedContact?.id, selectedContact?.membership]);
+
+  // Effects
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedContact?.id) return;
+
+    // Only clear and fetch messages if membership is 'join'
+    if (selectedContact?.membership === 'join') {
+      // Clear existing messages when contact changes
+      dispatch(clearMessages());
+      
+      // Fetch initial messages
+      dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
+    }
+  }, [dispatch, selectedContact?.id, selectedContact?.metadata?.membership]);
+
+  // Add membership change effect
+  useEffect(() => {
+    if (selectedContact?.membership === 'join') {
+      logger.info('[ChatView] Contact membership changed to join, fetching messages:', {
+        contactId: selectedContact.id
+      });
+      
+      // Clear existing messages
+      dispatch(clearMessages());
+      
+      // Fetch new messages
+      dispatch(fetchMessages({ 
+        contactId: selectedContact.id, 
+        page: 0, 
+        limit: PAGE_SIZE 
+      }));
+    }
+  }, [selectedContact?.membership, dispatch, selectedContact?.id]);
+
+  // Update socket event handlers
+  useEffect(() => {
+    if (!socket || !selectedContact?.id) return;
+
+    const handleContactUpdate = (data) => {
+      if (data.contactId === selectedContact.id) {
+        logger.info('[ChatView] Received contact update:', data);
+        // Update contact in parent component
+        onContactUpdate(data.contact);
+      }
+    };
+
+    const handleMembershipUpdate = (data) => {
+      if (data.contactId === selectedContact.id) {
+        logger.info('[ChatView] Received membership update:', data);
+        // Update contact in parent component with new membership
+        onContactUpdate({
+          ...selectedContact,
+          // metadata: {
+          //   ...selectedContact.metadata,
+          //   membership: data.membership
+          // }
+          membership: data.membership
+        });
+      }
+    };
+
+    socket.on('whatsapp:contact:update', handleContactUpdate);
+    socket.on('whatsapp:membership:update', handleMembershipUpdate);
+
+    return () => {
+      socket.off('whatsapp:contact:update', handleContactUpdate);
+      socket.off('whatsapp:membership:update', handleMembershipUpdate);
+    };
+  }, [socket, selectedContact?.id, onContactUpdate]);
+
+  // Socket event handlers
+  useEffect(() => {
+    if (!socket || !selectedContact?.id) return;
+
+    const handleNewMessage = (message) => {
+      if (message.contactId === selectedContact.id) {
+        logger.info('[ChatView] Received new message:', message);
+        dispatch(fetchMessages({ contactId: selectedContact.id, page: currentPage }));
+      scrollToBottom();
+    }
+    };
+
+    const handleMessageUpdate = (updatedMessage) => {
+      if (updatedMessage.contactId === selectedContact.id) {
+        logger.info('[ChatView] Message updated:', updatedMessage);
+        dispatch(updateMessageStatus({
+          contactId: selectedContact.id,
+          messageId: updatedMessage.id,
+          status: updatedMessage.status
+        }));
+      }
+    };
+
+    socket.on('whatsapp:message:new', handleNewMessage);
+    socket.on('whatsapp:message:update', handleMessageUpdate);
+
+    return () => {
+      socket.off('whatsapp:message:new', handleNewMessage);
+      socket.off('whatsapp:message:update', handleMessageUpdate);
+    };
+  }, [socket, selectedContact?.id, dispatch, currentPage, scrollToBottom]);
+
+  // Socket connection effect
+  useEffect(() => {
+    if (!socket) {
+      setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+      setSocketReady(false);
+      return;
+    }
+
+    // Initial state
+    setConnectionStatus(socket.connected ? CONNECTION_STATUS.CONNECTED : CONNECTION_STATUS.CONNECTING);
+    setSocketReady(socket.connected);
+
+    const handleConnect = () => {
+      logger.info('[ChatView] Socket connected');
+      setConnectionStatus(CONNECTION_STATUS.CONNECTED);
+      setSocketReady(true);
+    };
+
+    const handleDisconnect = () => {
+      logger.info('[ChatView] Socket disconnected');
+      setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+      setSocketReady(false);
+    };
+
+    const handleConnecting = () => {
+      logger.info('[ChatView] Socket connecting');
+      setConnectionStatus(CONNECTION_STATUS.CONNECTING);
+      setSocketReady(false);
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('connecting', handleConnecting);
+
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connecting', handleConnecting);
+    };
+  }, [socket]);
+
+  // Add sync state effects
+  useEffect(() => {
+    if (loading) {
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.APPROVED,
+        details: SYNC_STATUS_MESSAGES[SYNC_STATES.APPROVED],
+        progress: 50
+      }));
+    } else {
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.PENDING,
+        details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING],
+        progress: 0
+      }));
+    }
+  }, [loading]);
+
+  useEffect(() => {
+    if (messages.length > 0 && !loading) {
+        setSyncState(prev => ({
+          ...prev,
+        processedMessages: messages.length,
+        totalMessages: messages.length,
+        progress: 100,
+        state: SYNC_STATES.APPROVED,
+        details: 'Messages loaded successfully'
+        }));
+      }
+  }, [messages.length, loading]);
+
+  useEffect(() => {
+    if (error) {
+        setSyncState(prev => ({
+          ...prev,
+        state: SYNC_STATES.REJECTED,
+        details: `Error: ${error}`,
+        errors: [...prev.errors, { message: error, timestamp: Date.now() }]
+        }));
+      }
+  }, [error]);
+
+  // Render functions
+  const renderConnectionStatus = useCallback(() => {
+    switch (connectionStatus) {
+      case CONNECTION_STATUS.CONNECTED:
+        return (
+          <span className="text-sm text-green-500 flex items-center">
+            <FiWifi className="w-4 h-4 mr-1" />
+            Connected
+          </span>
+        );
+      case CONNECTION_STATUS.DISCONNECTED:
+        return (
+          <span className="text-sm text-red-500 flex items-center">
+            <FiWifiOff className="w-4 h-4 mr-1" />
+            Disconnected
+          </span>
+        );
+      case CONNECTION_STATUS.CONNECTING:
+        return (
+          <span className="text-sm text-yellow-500 flex items-center">
+            <FiWifi className="w-4 h-4 mr-1 animate-pulse" />
+            Connecting...
+          </span>
+        );
+      default:
+        return null;
+    }
+  }, [connectionStatus]);
+
+  const renderMessages = useCallback(() => {
+    if (!messages) return null;
+    if (loading && !messages.length) return <LoadingSpinner />;
+    if (error) return <div className="text-red-500 text-center">{error}</div>;
+    if (!messages.length) return <div className="text-gray-400 text-center">No messages yet</div>;
+
+    try {
+      return messages.map((message) => (
+        <MessageItem 
+          key={message.id || message.message_id} 
+          message={message}
+          currentUser={currentUser}
+        />
+      ));
+    } catch (err) {
+      logger.error('[ChatView] Error rendering messages:', err);
+      return <div className="text-red-500 text-center">Error displaying messages</div>;
+    }
+  }, [messages, loading, error, currentUser]);
+
   if (!selectedContact) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
@@ -707,7 +665,7 @@ const ChatView = ({ selectedContact }) => {
   }
 
   return (
-    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full">
+    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full relative">
       {/* Chat Header - Fixed height */}
       <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
         <div className="flex items-center space-x-3">
@@ -715,37 +673,20 @@ const ChatView = ({ selectedContact }) => {
             {selectedContact.avatar_url ? (
               <img 
                 src={selectedContact.avatar_url} 
-                alt={selectedContact.display_name}
+                alt={selectedContact.display_name || 'Contact'}
                 className="w-full h-full rounded-full object-cover"
               />
             ) : (
               <span className="text-white text-lg">
-                {selectedContact.display_name[0].toUpperCase()}
+                {(selectedContact.display_name || '?')[0].toUpperCase()}
               </span>
             )}
           </div>
           <div>
+            <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
             <div className="flex items-center space-x-2">
-              <h3 className="font-medium text-white">{selectedContact.display_name}</h3>
-              {priority && (
-                <span className={`px-2 py-0.5 text-xs rounded-full ${
-                  priority === 'HIGH' ? 'bg-red-500/20 text-red-400' :
-                  priority === 'MEDIUM' ? 'bg-yellow-500/20 text-yellow-400' :
-                  'bg-green-500/20 text-green-400'
-                }`}>
-                  {priority}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center text-sm">
-              <span className={`w-2 h-2 rounded-full mr-2 ${
-                connectionStatus === 'connected' ? 'bg-green-500' :
-                connectionStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500'
-              }`} />
-              <span className="text-gray-400">
-                {connectionStatus === 'connected' ? 'Online' :
-                 connectionStatus === 'error' ? 'Connection Error' : 'Connecting...'}
-              </span>
+            {renderConnectionStatus()}
+              <span className="text-sm text-yellow-500 ml-2">Medium Priority</span>
             </div>
           </div>
         </div>
@@ -775,138 +716,39 @@ const ChatView = ({ selectedContact }) => {
         </div>
       </div>
 
+      {/* Sync Progress Indicator - Only show when loading or on error */}
+      {(loading || error) && <SyncProgressIndicator syncState={syncState} />}
+
       {/* Messages Area - Scrollable */}
       <div 
         ref={messagesContainerRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-6 space-y-4"
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+        onScroll={async (e) => {
+          const { scrollTop, scrollHeight, clientHeight } = e.target;
+          if (scrollTop === 0 && hasMoreMessages && !loading) {
+            const nextPage = currentPage + 1;
+            await dispatch(fetchMessages({
+              contactId: selectedContact.id,
+              page: nextPage,
+              limit: PAGE_SIZE
+            }));
+          }
+        }}
       >
-        {loading && !messages.length ? (
-          <div className="flex justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#1e6853]"></div>
-          </div>
-        ) : error && !messages.length ? (
-          <div className="text-center text-red-400">
-            {error}
-            <button 
-              onClick={() => fetchMessages(selectedContact, 1)}
-              className="block mx-auto mt-2 text-sm text-[#1e6853] hover:underline"
-            >
-              Try again
-            </button>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="text-center text-gray-400">
-            No messages yet
-          </div>
-        ) : (
-          <>
-            {loading && (
-              <div className="text-center text-gray-400 py-2">
-                Loading more messages...
-              </div>
-            )}
-            {messages.map((message, index) => {
-              const showDate = index === 0 || 
-                new Date(message.timestamp).toDateString() !== 
-                new Date(messages[index - 1].timestamp).toDateString();
-
-              const isOutgoing = currentUser && (
-                message.sender_id === currentUser.id || 
-                message.sender_id.includes(currentUser.matrix_id) ||
-                message.sender_id === currentUser.whatsapp_id
-              );
-
-              return (
-                <React.Fragment key={message.id}>
-                  {showDate && (
-                    <div className="flex justify-center my-4">
-                      <span className="px-4 py-1 bg-[#24283b] rounded-full text-sm text-gray-400">
-                        {new Date(message.timestamp).toLocaleDateString()}
-                      </span>
-                    </div>
-                  )}
-                  <div className={`flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                      isOutgoing
-                        ? 'bg-[#24283b] rounded-br-none'
-                        : 'bg-[#1e6853] rounded-bl-none'
-                    }`}>
-                      <div onClick={() => {
-                        const mediaTypes = ['image', 'video'];
-                        const messageType = getMessageType(message);
-                        if (mediaTypes.includes(messageType)) {
-                          handleMediaPreview({
-                            type: messageType,
-                            url: getMediaUrl(message),
-                            caption: message.content,
-                            info: message.metadata?.raw_event?.content?.info
-                          });
-                        }
-                      }}>
-                        <MessageContent message={message} />
-                      </div>
-                      <div className="flex items-center justify-end mt-1 space-x-1">
-                        <span className="text-xs text-gray-400">
-                          {new Date(message.timestamp).toLocaleTimeString([], { 
-                            hour: '2-digit', 
-                            minute: '2-digit' 
-                          })}
-                        </span>
-                        {isOutgoing && (
-                          <span className="text-xs text-gray-400">
-                            {message.delivery_status === 'failed' ? '✕' :
-                             message.delivery_status === 'sent' ? '✓' :
-                             message.is_read ? '✓✓' : '✓'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </React.Fragment>
-              );
-            })}
-          </>
-        )}
+        {renderMessages()}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Message Input - Fixed height */}
-      <div className="px-4 py-3 bg-[#24283b] border-t border-gray-700 flex-none">
+      {/* <div className="px-4 py-3 bg-[#24283b] border-t border-gray-700 flex-none">
         <form
           onSubmit={async (e) => {
             e.preventDefault();
             const input = e.target.elements.message;
             const content = input.value.trim();
-            
             if (!content) return;
-            
-            const message = { content };
-            
-            if (connectionStatus !== 'connected') {
-              setMessageQueue(prev => [...prev, message]);
+            await handleMessageSend(content);
               input.value = '';
-              toast.success('Message queued for delivery');
-              return;
-            }
-            
-            try {
-              const response = await api.post(
-                `/api/whatsapp-entities/send-message/${selectedContact.id}`,
-                message
-              );
-              
-              if (response.data.status === 'success') {
-                input.value = '';
-              } else {
-                throw new Error(response.data.message || 'Failed to send message');
-              }
-            } catch (error) {
-              console.error('Error sending message:', error);
-              toast.error(error.response?.data?.message || 'Failed to send message');
-              // Queue message for retry
-              setMessageQueue(prev => [...prev, message]);
-            }
           }}
           className="flex items-center space-x-2"
         >
@@ -925,72 +767,71 @@ const ChatView = ({ selectedContact }) => {
             Send
           </button>
         </form>
-      </div>
+      </div> */}
+
+      {/* Render InviteAcceptanceModal */}
+      {showInviteModal && selectedContact && (
+        <InviteAcceptanceModal
+          contact={selectedContact}
+          onAccept={handleAcceptInvite}
+          onClose={() => setShowInviteModal(false)}
+        />
+      )}
 
       {/* Summary Modal */}
-      {showSummary && summary && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
-          onClick={() => setShowSummary(false)}
-        >
-          <div 
-            className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-4"
-            onClick={e => e.stopPropagation()}
-          >
+      {showSummaryModal && summaryData && (
+        <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+          <div className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-6">
             <div className="flex justify-between items-center">
-              <h3 className="text-xl font-medium text-white">Conversation Summary</h3>
-              <button 
-                onClick={() => setShowSummary(false)}
+              <h3 className="text-xl font-medium text-white">Chat Summary</h3>
+              <button
+                onClick={() => setShowSummaryModal(false)}
                 className="text-gray-400 hover:text-white"
               >
                 <FiX className="w-5 h-5" />
               </button>
-            </div>
+      </div>
             
+            {/* Main Points */}
             <div className="space-y-4">
-              {summary.summary.mainPoints.length > 0 && (
-                <div>
-                  <h4 className="text-white font-medium mb-2">Main Discussion Points</h4>
-                  <ul className="list-disc list-inside text-gray-300 space-y-1">
-                    {summary.summary.mainPoints.map((point, index) => (
-                      <li key={index}>{point}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              
-              {summary.summary.actionItems.length > 0 && (
+              <div>
+                <h4 className="text-white font-medium mb-2">Main Points</h4>
+                <ul className="list-disc list-inside text-gray-300 space-y-1">
+                  {summaryData.summary.mainPoints.map((point, index) => (
+                    <li key={index}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Action Items */}
+              {summaryData.summary.actionItems.length > 0 && (
                 <div>
                   <h4 className="text-white font-medium mb-2">Action Items</h4>
                   <ul className="list-disc list-inside text-gray-300 space-y-1">
-                    {summary.summary.actionItems.map((item, index) => (
+                    {summaryData.summary.actionItems.map((item, index) => (
                       <li key={index}>{item}</li>
                     ))}
                   </ul>
                 </div>
               )}
 
-              {summary.summary.keyDecisions.length > 0 && (
+              {/* Key Decisions */}
+              {summaryData.summary.keyDecisions.length > 0 && (
                 <div>
                   <h4 className="text-white font-medium mb-2">Key Decisions</h4>
                   <ul className="list-disc list-inside text-gray-300 space-y-1">
-                    {summary.summary.keyDecisions.map((decision, index) => (
+                    {summaryData.summary.keyDecisions.map((decision, index) => (
                       <li key={index}>{decision}</li>
                     ))}
                   </ul>
                 </div>
               )}
-              
+
+              {/* Summary Info */}
               <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
-                {summary.messageCount > 0 ? (
-                  <>
-                    Analyzed {summary.messageCount} messages from{' '}
-                    {new Date(summary.timespan.start).toLocaleString()} to{' '}
-                    {new Date(summary.timespan.end).toLocaleString()}
-                  </>
-                ) : (
-                  'No messages analyzed'
-                )}
+                <p>Analyzed {summaryData.messageCount} messages</p>
+                <p>From: {new Date(summaryData.timespan.start).toLocaleString()}</p>
+                <p>To: {new Date(summaryData.timespan.end).toLocaleString()}</p>
               </div>
             </div>
           </div>
@@ -1000,4 +841,13 @@ const ChatView = ({ selectedContact }) => {
   );
 };
 
-export default ChatView;
+
+// Wrap ChatView with ErrorBoundary
+export const ChatViewWithErrorBoundary = (props) => (
+  <ErrorBoundary FallbackComponent={ErrorFallback}>
+    <ChatView {...props} />
+  </ErrorBoundary>
+);
+
+export default ChatViewWithErrorBoundary;
+
