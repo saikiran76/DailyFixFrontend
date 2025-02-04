@@ -56,7 +56,7 @@ const AppContent = () => {
 
   // If we're not initializing and have no session, redirect to login
   // unless we're already on the login page
-  if (!initializing && !session && location.pathname !== '/login') {
+  if (!initializing && !session && !['login', 'signup'].includes(location.pathname.split('/')[1])) {
     logger.info('[AppContent] No session found, redirecting to login');
     return <Navigate to="/login" replace />;
   }

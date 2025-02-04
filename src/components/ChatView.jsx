@@ -250,7 +250,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     try {
       setIsSummarizing(true);
       logger.info('[ChatView] Fetching summary for contact:', {
-        contactId: selectedContact.id,
+          contactId: selectedContact.id,
         messageCount: messages.length
       });
       
@@ -259,10 +259,10 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       if (!response.data?.summary) {
         toast.success('summary: ', response?.data);
         return;
-      }
+    }
 
       logger.info('[ChatView] Summary received:', {
-        contactId: selectedContact.id,
+      contactId: selectedContact.id,
         summary: response.data
       });
       
@@ -296,7 +296,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           // Case B: success but joinedBefore = true
           logger.warn('[ChatView] Contact already joined the room');
           toast.success('Already joined this room');
-        } else {
+      } else {
           // Case A: success, joinedBefore = false
           toast.success('Invite accepted successfully');
         }
@@ -327,7 +327,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           setShowInviteModal(false);
           dispatch(clearMessages());
           dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
-        } else {
+    } else {
           // Actually a failure
           const errorMsg = response.data?.message || 'Failed to accept invite';
           logger.error('[ChatView] Error accepting invite:', { error: errorMsg });
@@ -497,8 +497,8 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       if (message.contactId === selectedContact.id) {
         logger.info('[ChatView] Received new message:', message);
         dispatch(fetchMessages({ contactId: selectedContact.id, page: currentPage }));
-        scrollToBottom();
-      }
+      scrollToBottom();
+    }
     };
 
     const handleMessageUpdate = (updatedMessage) => {
@@ -583,26 +583,26 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
   useEffect(() => {
     if (messages.length > 0 && !loading) {
-      setSyncState(prev => ({
-        ...prev,
+        setSyncState(prev => ({
+          ...prev,
         processedMessages: messages.length,
         totalMessages: messages.length,
         progress: 100,
         state: SYNC_STATES.APPROVED,
         details: 'Messages loaded successfully'
-      }));
-    }
+        }));
+      }
   }, [messages.length, loading]);
 
   useEffect(() => {
     if (error) {
-      setSyncState(prev => ({
-        ...prev,
+        setSyncState(prev => ({
+          ...prev,
         state: SYNC_STATES.REJECTED,
         details: `Error: ${error}`,
         errors: [...prev.errors, { message: error, timestamp: Date.now() }]
-      }));
-    }
+        }));
+      }
   }, [error]);
 
   // Render functions
@@ -683,7 +683,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           <div>
             <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
             <div className="flex items-center space-x-2">
-              {renderConnectionStatus()}
+            {renderConnectionStatus()}
               <span className="text-sm text-yellow-500 ml-2">Medium Priority</span>
             </div>
           </div>
@@ -788,7 +788,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               >
                 <FiX className="w-5 h-5" />
               </button>
-            </div>
+      </div>
             
             {/* Main Points */}
             <div className="space-y-4">

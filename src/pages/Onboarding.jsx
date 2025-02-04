@@ -6,12 +6,18 @@ import { toast } from 'react-hot-toast';
 import ProtocolSelection from '../components/ProtocolSelection';
 import WhatsAppBridgeSetup from '../components/WhatsAppBridgeSetup';
 import { useDispatch, useSelector } from 'react-redux';
-import { fetchOnboardingStatus, updateOnboardingStep } from '../store/slices/onboardingSlice';
+import { 
+  fetchOnboardingStatus, 
+  updateOnboardingStep,
+  setOnboardingError,
+  selectOnboardingState,
+  ONBOARDING_ROUTES 
+} from '../store/slices/onboardingSlice';
 import { onboardingService } from '../services/onboardingService';
 
 // Onboarding steps configuration
 const ONBOARDING_STEPS = {
-  INITIAL: 'initial',
+  WELCOME: 'welcome',
   PROTOCOL_SELECTION: 'protocol_selection',
   MATRIX: 'matrix',
   WHATSAPP: 'whatsapp',
@@ -20,7 +26,7 @@ const ONBOARDING_STEPS = {
 
 // Add step metadata
 const STEP_METADATA = {
-  [ONBOARDING_STEPS.INITIAL]: {
+  [ONBOARDING_STEPS.WELCOME]: {
     title: 'Welcome to DailyFix',
     description: 'Let\'s get you set up with a secure messaging protocol.',
     nextSteps: ['protocol_selection']
@@ -52,7 +58,7 @@ const isValidStep = (step) => Object.values(ONBOARDING_STEPS).includes(step);
 
 const getNextStep = (currentStep, connectedPlatforms = []) => {
   switch (currentStep) {
-    case ONBOARDING_STEPS.INITIAL:
+    case ONBOARDING_STEPS.WELCOME:
       return ONBOARDING_STEPS.PROTOCOL_SELECTION;
     case ONBOARDING_STEPS.PROTOCOL_SELECTION:
       return ONBOARDING_STEPS.MATRIX;
@@ -63,7 +69,7 @@ const getNextStep = (currentStep, connectedPlatforms = []) => {
     case ONBOARDING_STEPS.COMPLETE:
       return null;
     default:
-      return ONBOARDING_STEPS.INITIAL;
+      return ONBOARDING_STEPS.WELCOME;
   }
 };
 
@@ -74,122 +80,260 @@ const MATRIX_SERVER_DOMAIN = 'example-mtbr.duckdns.org';
 // Step components
 const WelcomeStep = ({ onNext }) => {
   return (
-    <div className="max-w-lg mx-auto text-center p-8">
-      <h1 className="text-3xl font-bold mb-4">Welcome to Daily Fix</h1>
-      <p className="text-gray-300 mb-8">
-        Your centralized messaging hub powered by Matrix. Let's get you set up in just a few steps.
-      </p>
+    <div className="max-w-2xl mx-auto text-center">
+      <h1 className="text-4xl font-bold mb-6">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].title}</h1>
+      <p className="text-xl mb-8">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
       <button
         onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
-        className="bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/80 transition-colors"
+        className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
       >
-        Get Started with Matrix
+        Get Started
       </button>
     </div>
   );
 };
 
 const MatrixSetupStep = ({ onNext }) => {
-  const [status, setStatus] = useState({
-    loading: true,
-    error: null,
-    showSuccess: false,
-    connectionStatus: null
-  });
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const { loading, error, connectedPlatforms } = useSelector(state => state.onboarding);
+  const { session } = useSelector(state => state.auth);
+  const [matrixCredentials, setMatrixCredentials] = useState({
+    userId: '',
+    password: '',
+    homeserver: DEFAULT_MATRIX_HOMESERVER
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState(null);
 
+  // Clear form error when credentials change
   useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        setStatus(prev => ({ ...prev, loading: true, error: null }));
-        const onboardingStatus = await onboardingService.getOnboardingStatus(true);
-        
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          connectionStatus: onboardingStatus.matrixConnected ? 'connected' : 'disconnected'
-        }));
-      } catch (error) {
-        console.error('Error checking status:', error);
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          error: 'Failed to check connection status. Please try again.'
-        }));
-      }
-    };
+    if (formError) {
+      setFormError(null);
+    }
+  }, [matrixCredentials]);
 
-    checkStatus();
-  }, [dispatch, navigate]);
-
-  const handleComplete = async () => {
+  const handleBack = async () => {
     try {
-      setStatus(prev => ({ ...prev, loading: true, error: null }));
-      const onboardingStatus = await onboardingService.getOnboardingStatus(true);
+      setFormError(null);
+      await dispatch(updateOnboardingStep({ 
+        step: ONBOARDING_STEPS.PROTOCOL_SELECTION 
+      })).unwrap();
+      navigate('/onboarding/protocol_selection');
+      } catch (error) {
+      console.error('Navigation error:', error);
+      toast.error('Failed to navigate back. Please try again.');
+    }
+  };
 
-      // Only proceed if Matrix is connected
-      if (!onboardingStatus.matrixConnected) {
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          error: 'Matrix connection is required before proceeding.'
-        }));
-        return;
+  const validateForm = () => {
+    if (!matrixCredentials.userId.trim()) {
+      setFormError('Matrix User ID is required');
+      return false;
+    }
+    if (!matrixCredentials.userId.includes(':')) {
+      setFormError('Invalid Matrix User ID format. Should be like @user:domain.com');
+      return false;
+    }
+    if (!matrixCredentials.password) {
+      setFormError('Password is required');
+      return false;
+    }
+    if (!matrixCredentials.homeserver.startsWith('http')) {
+      setFormError('Invalid homeserver URL. Should start with http:// or https://');
+      return false;
+    }
+    return true;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Clear previous errors
+    setFormError(null);
+    
+    // Validate form
+    if (!validateForm()) {
+      return;
+    }
+
+    try {
+      if (!session?.user?.id) {
+        throw new Error('No valid session found');
       }
 
-      // Proceed to WhatsApp setup
-      await dispatch(updateOnboardingStep({ step: 'whatsapp' })).unwrap();
-      onNext();
+      setIsSubmitting(true);
+      const loadingToast = toast.loading('Connecting to Matrix...');
+
+      const response = await api.post('/matrix/initialize', {
+        userId: matrixCredentials.userId,
+        password: matrixCredentials.password,
+        homeserver: matrixCredentials.homeserver
+      });
+
+      if (response.data.status === 'active') {
+        await dispatch(updateOnboardingStep({ 
+          step: ONBOARDING_STEPS.WHATSAPP,
+          data: { 
+            matrixConnected: true,
+            connectedPlatforms: [...connectedPlatforms, 'matrix']
+          }
+        })).unwrap();
+
+        toast.success('Matrix connection successful!');
+        toast.dismiss(loadingToast);
+        navigate('/onboarding/whatsapp');
+      } else {
+        setFormError(response.data.message || 'Failed to connect to Matrix. Please check your credentials.');
+        toast.error(response.data.message || 'Connection failed');
+        toast.dismiss(loadingToast);
+      }
     } catch (error) {
-      console.error('Error completing setup:', error);
-      setStatus(prev => ({
-        ...prev,
-        loading: false,
-        error: 'Failed to complete setup. Please try again.'
-      }));
+      console.error('Matrix setup error:', error);
+      const errorMessage = error.response?.data?.message || error.message;
+      setFormError(errorMessage);
+      dispatch(setOnboardingError(errorMessage));
+      toast.error('Failed to connect to Matrix. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="max-w-lg mx-auto p-8">
-      <h2 className="text-2xl font-bold mb-4">{STEP_METADATA[ONBOARDING_STEPS.MATRIX].title}</h2>
-      <p className="text-gray-300 mb-8">{STEP_METADATA[ONBOARDING_STEPS.MATRIX].description}</p>
-      
-      {status.connectionStatus === 'connected' ? (
-        <div className="text-center">
-          <div className="text-green-500 mb-4">✓</div>
-          <p className="text-green-400 mb-4">Matrix connected successfully!</p>
+    <div className="max-w-2xl mx-auto p-8">
+      <div className="flex items-center justify-between mb-6">
           <button
-            onClick={handleComplete}
-            className="px-6 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
+          onClick={handleBack}
+          className="flex items-center text-gray-400 hover:text-white transition-colors"
+          disabled={isSubmitting}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-5 w-5 mr-2"
+            viewBox="0 0 20 20"
+            fill="currentColor"
           >
-            Continue to WhatsApp Setup
+            <path
+              fillRule="evenodd"
+              d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
+              clipRule="evenodd"
+            />
+          </svg>
+          Back to Protocol Selection
           </button>
+        <h2 className="text-2xl font-bold text-white">Matrix Protocol Setup</h2>
+      </div>
+      
+      {formError && (
+        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+          <div className="flex items-center text-red-500">
+            <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <span>{formError}</span>
+          </div>
+          <p className="mt-2 text-sm text-red-400">
+            Please check your credentials and try again. Make sure you can log into Element with these credentials.
+          </p>
         </div>
-      ) : (
+      )}
+      
+      <form onSubmit={handleSubmit} className="space-y-6">
         <div>
-          <ol className="list-decimal list-inside mb-8 space-y-4">
+          <label className="block text-sm font-medium text-gray-400 mb-2">
+            Matrix User ID
+          </label>
+          <input
+            type="text"
+            value={matrixCredentials.userId}
+            onChange={(e) => setMatrixCredentials(prev => ({
+              ...prev,
+              userId: e.target.value
+            }))}
+            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+              formError && !matrixCredentials.userId ? 'border-red-500' : 'border-gray-700'
+            }`}
+            placeholder="@username:example.com"
+            disabled={isSubmitting}
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-400 mb-2">
+            Password
+          </label>
+          <input
+            type="password"
+            value={matrixCredentials.password}
+            onChange={(e) => setMatrixCredentials(prev => ({
+              ...prev,
+              password: e.target.value
+            }))}
+            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+              formError && !matrixCredentials.password ? 'border-red-500' : 'border-gray-700'
+            }`}
+            placeholder="Enter your password"
+            disabled={isSubmitting}
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-400 mb-2">
+            Homeserver URL
+          </label>
+          <input
+            type="text"
+            value={matrixCredentials.homeserver}
+            onChange={(e) => setMatrixCredentials(prev => ({
+              ...prev,
+              homeserver: e.target.value
+            }))}
+            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+              formError && !matrixCredentials.homeserver.startsWith('http') ? 'border-red-500' : 'border-gray-700'
+            }`}
+            placeholder="https://matrix.example.com"
+            disabled={isSubmitting}
+            required
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className={`w-full py-3 px-4 rounded-lg font-medium ${
+            isSubmitting
+              ? 'bg-primary/50 cursor-not-allowed'
+              : 'bg-primary hover:bg-primary/90'
+          } text-white transition-colors flex items-center justify-center`}
+        >
+          {isSubmitting ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Connecting...
+            </>
+          ) : (
+            'Connect to Matrix'
+          )}
+        </button>
+      </form>
+
+      <div className="mt-8 text-center">
+        <p className="text-sm text-gray-500">
+          Your Matrix account will be used to bridge with other messaging platforms.
+          Make sure you have access to the Matrix homeserver.
+        </p>
+        <ol className="list-decimal list-inside mb-8 space-y-4 text-left text-gray-400">
             <li>Install Element on your device if you haven't already</li>
             <li>Create a Matrix account or sign in to your existing one</li>
             <li>Keep Element open to receive the invitation</li>
             <li>Click continue below to proceed</li>
           </ol>
-          <button
-            onClick={handleComplete}
-            className="w-full px-6 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
-            disabled={!status.connectionStatus === 'connected'}
-          >
-            Continue
-          </button>
         </div>
-      )}
-
-      {status.error && (
-        <div className="mt-4 p-4 bg-red-500/10 border border-red-500 rounded-lg">
-          <p className="text-red-400">{status.error}</p>
-        </div>
-      )}
     </div>
   );
 };
@@ -335,119 +479,97 @@ const PlatformSelectionStep = ({ onNext }) => {
 };
 
 const WhatsAppSetupStep = () => {
-  const [status, setStatus] = useState({
-    loading: true,
-    error: null,
-    showSuccess: false,
-    connectionStatus: null,
-    matrixConnected: false
-  });
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const { loading, error, matrixConnected, whatsappConnected, currentStep } = useSelector(selectOnboardingState);
+  const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     const checkStatus = async () => {
       try {
-        setStatus(prev => ({ ...prev, loading: true, error: null }));
-        const onboardingStatus = await onboardingService.getOnboardingStatus(true);
+        const onboardingStatus = await dispatch(fetchOnboardingStatus()).unwrap();
+        console.log('[WhatsAppSetupStep] Status check:', onboardingStatus);
         
-        // Strict Matrix dependency check
-        if (!onboardingStatus.matrixConnected) {
-          setStatus(prev => ({
-            ...prev,
-            loading: false,
-            error: 'Matrix connection is required. Redirecting to Matrix setup...'
-          }));
-          // Short delay to show the error message
-          setTimeout(async () => {
-            await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
-            navigate('/onboarding/matrix', { replace: true });
-          }, 2000);
+        if (!mounted) return;
+
+        // Only redirect if explicitly not connected
+        if (onboardingStatus.matrixConnected === false) {
+          dispatch(setOnboardingError('Matrix connection is required'));
+          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
+          navigate(ONBOARDING_ROUTES.MATRIX, { replace: true });
           return;
         }
-
-        // If both are connected, complete onboarding
-        if (onboardingStatus.whatsappConnected && onboardingStatus.matrixConnected) {
-          setStatus(prev => ({ ...prev, showSuccess: true }));
-          await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
-          navigate('/dashboard', { replace: true });
-          return;
-        }
-
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          matrixConnected: onboardingStatus.matrixConnected,
-          connectionStatus: onboardingStatus.whatsappConnected ? 'connected' : 'disconnected'
-        }));
       } catch (error) {
         console.error('Error checking status:', error);
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          error: 'Failed to check connection status. Please try again.'
-        }));
+        if (mounted) {
+          dispatch(setOnboardingError('Failed to check connection status. Please try again.'));
+        }
+      } finally {
+        if (mounted) {
+          setIsChecking(false);
+        }
       }
     };
 
     checkStatus();
+    return () => {
+      mounted = false;
+    };
   }, [dispatch, navigate]);
 
   const handleComplete = async () => {
     try {
-      setStatus(prev => ({ ...prev, loading: true, error: null }));
-      const onboardingStatus = await onboardingService.getOnboardingStatus(true);
-
-      // Double-check Matrix connection
-      if (!onboardingStatus.matrixConnected) {
-        setStatus(prev => ({
-          ...prev,
-          loading: false,
-          error: 'Matrix connection is required. Redirecting to Matrix setup...'
-        }));
-        setTimeout(async () => {
-          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
-          navigate('/onboarding/matrix', { replace: true });
-        }, 2000);
+      // Use current Redux state instead of fetching
+      if (!matrixConnected || !whatsappConnected) {
+        logger.error('[WhatsAppSetupStep] Cannot complete onboarding - services not connected:', { matrixConnected, whatsappConnected });
+        dispatch(setOnboardingError('Both Matrix and WhatsApp must be connected to complete setup'));
         return;
       }
 
-      if (onboardingStatus.whatsappConnected) {
-        setStatus(prev => ({ ...prev, showSuccess: true }));
-        await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
-        navigate('/dashboard', { replace: true });
-      }
+      // Update onboarding step to complete
+      await dispatch(updateOnboardingStep({ 
+        step: 'complete',
+        data: { 
+          whatsappConnected: true,
+          matrixConnected: true,
+          isComplete: true,
+          connectedPlatforms: ['matrix', 'whatsapp']
+        }
+      })).unwrap();
+
+      // Navigate to completion route
+      navigate(ONBOARDING_ROUTES.COMPLETE, { replace: true });
     } catch (error) {
-      console.error('Error completing setup:', error);
-      setStatus(prev => ({
-        ...prev,
-        loading: false,
-        error: 'Failed to complete setup. Please try again.'
-      }));
+      logger.error('[WhatsAppSetupStep] Error completing setup:', error);
+      dispatch(setOnboardingError('Failed to complete setup. Please try again.'));
     }
   };
 
-  // Show loading state while checking status or completing onboarding
-  if (status.loading || status.showSuccess) {
+  console.log('[WhatsAppSetupStep] Component state:', { isChecking, loading, error, whatsappConnected });
+
+  if (isChecking) {
+    console.log('[WhatsAppSetupStep] Showing loading state');
     return (
       <div className="max-w-lg mx-auto text-center p-8">
         <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
-        <p className="text-gray-300">
-          {status.showSuccess ? 'Completing setup and redirecting to dashboard...' : 'Checking connection status...'}
-        </p>
+        <p className="text-gray-300">Checking connection status...</p>
       </div>
     );
   }
 
-  if (status.error) {
+  if (error) {
+    console.log('[WhatsAppSetupStep] Showing error state:', error);
     return (
       <div className="max-w-lg mx-auto text-center p-8">
         <div className="text-red-500 mb-4">⚠️</div>
-        <p className="text-red-400">
-          {status.error}
-        </p>
+        <p className="text-red-400">{error}</p>
         <button 
-          onClick={() => dispatch(fetchOnboardingStatus())}
+          onClick={() => {
+            setIsChecking(true);
+            dispatch(fetchOnboardingStatus());
+          }}
           className="mt-4 px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
         >
           Retry
@@ -456,12 +578,14 @@ const WhatsAppSetupStep = () => {
     );
   }
 
+  console.log('[WhatsAppSetupStep] Rendering main content. WhatsApp connected:', whatsappConnected);
+
   return (
     <div className="max-w-lg mx-auto p-8">
       <h2 className="text-2xl font-bold mb-4">{STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].title}</h2>
       <p className="text-gray-300 mb-8">{STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].description}</p>
       
-      {status.connectionStatus === 'connected' ? (
+      {whatsappConnected ? (
         <div className="text-center">
           <div className="text-green-500 mb-4">✓</div>
           <p className="text-green-400 mb-4">WhatsApp connected successfully!</p>
@@ -473,7 +597,10 @@ const WhatsAppSetupStep = () => {
           </button>
         </div>
       ) : (
-        <WhatsAppBridgeSetup onComplete={handleComplete} />
+        <>
+          {console.log('[WhatsAppSetupStep] Rendering WhatsAppBridgeSetup')}
+          <WhatsAppBridgeSetup onComplete={handleComplete} />
+        </>
       )}
     </div>
   );
@@ -494,7 +621,16 @@ const CompletionStep = () => {
 
       try {
         setHasAttempted(true);
-        await dispatch(updateOnboardingStep({ step: 'complete' })).unwrap();
+        // Update onboarding step to complete with all necessary data
+        await dispatch(updateOnboardingStep({ 
+          step: 'complete',
+          data: { 
+            whatsappConnected: true,
+            matrixConnected: true,
+            isComplete: true,
+            connectedPlatforms: ['matrix', 'whatsapp']
+          }
+        })).unwrap();
         navigate('/dashboard', { replace: true });
       } catch (error) {
         // Log error but continue to dashboard
@@ -551,7 +687,7 @@ const Onboarding = () => {
         
         // Validate step and redirect if needed
         if (!isValidStep(urlStep)) {
-          const validStep = status.currentStep || ONBOARDING_STEPS.INITIAL;
+          const validStep = status.currentStep || ONBOARDING_STEPS.WELCOME;
           navigate(`/onboarding/${validStep}`, { replace: true });
         }
       } catch (error) {
@@ -587,7 +723,7 @@ const Onboarding = () => {
 
   const renderStep = () => {
     switch (currentStep) {
-      case ONBOARDING_STEPS.INITIAL:
+      case ONBOARDING_STEPS.WELCOME:
         return <WelcomeStep onNext={handleStepChange} />;
       case ONBOARDING_STEPS.PROTOCOL_SELECTION:
         return <ProtocolSelection onNext={() => handleStepChange(ONBOARDING_STEPS.MATRIX)} />;

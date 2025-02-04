@@ -1,9 +1,13 @@
 // frontend/src/pages/Signup.jsx
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
 import supabase from '../utils/supabase';
 import api from '../utils/api';
 import '../styles/Login.css';
+import logger from '../utils/logger';
+import { updateSession } from '../store/slices/authSlice';
+import { toast } from 'react-toastify';
 
 const Signup = () => {
   const [firstName, setFirstName] = useState('');
@@ -13,6 +17,7 @@ const Signup = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const dispatch = useDispatch();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -20,8 +25,10 @@ const Signup = () => {
     setIsLoading(true);
 
     try {
+      logger.info('[Signup] Attempting signup with email:', email);
+      
       // Sign up with Supabase
-      const { data, error: signUpError } = await supabase.auth.signUp({
+      const { data, signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
@@ -32,16 +39,55 @@ const Signup = () => {
         }
       });
 
+      logger.info('[Signup] Supabase response:', { 
+        hasData: !!data,
+        hasUser: !!data?.user,
+        hasSession: !!data?.session,
+        error: signUpError
+      });
+
       if (signUpError) throw signUpError;
 
-      if (data?.user) {
-        const token = data.session?.access_token;
-        localStorage.setItem('supabase.auth.token', token);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      // Check if email confirmation is required
+      if (data?.user?.identities?.length === 0) {
+        logger.info('[Signup] Email confirmation required');
+        toast.info('Email verification required! Please check your inbox.');
+        setError('Please check your email inbox to verify your account. Redirecting to login...');
+        setTimeout(() => {
+          navigate('/login');
+        }, 5500);
+        return;
+      }
+
+      if (data?.user && data?.session) {
+        logger.info('[Signup] Signup successful, storing session');
+        
+        // Store complete session in Redux
+        dispatch(updateSession({ session: data.session }));
+        
+        // Store auth data in localStorage
+        const authData = {
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+          expires_at: data.session.expires_at
+        };
+        localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+        
+        // Update API headers
+        api.defaults.headers.common['Authorization'] = `Bearer ${data.session.access_token}`;
+        
+        logger.info('[Signup] Session stored, navigating to onboarding');
         navigate('/onboarding');
+      } else {
+        logger.error('[Signup] Missing session data:', {
+          user: data?.user,
+          session: data?.session,
+          identities: data?.user?.identities
+        });
+        throw new Error('Signup successful but waiting for email confirmation. Please check your email.');
       }
     } catch (error) {
-      console.error('Signup error:', error);
+      logger.error('[Signup] Error during signup:', error);
       setError(error.message || 'Signup failed. Please try again.');
     } finally {
       setIsLoading(false);

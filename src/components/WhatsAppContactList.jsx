@@ -135,7 +135,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           message: 'Syncing contacts...'
         });
       } else {
-        toast.success('Contacts refreshed successfully');
+      toast.success('Contacts refreshed successfully');
       }
     } catch (err) {
       logger.error('[WhatsAppContactList] Refresh error:', err);

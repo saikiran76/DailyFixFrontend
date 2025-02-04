@@ -7,14 +7,24 @@ import { executeAtomically } from '../utils/atomicOperations';
 
 // State configuration with metadata and hooks
 const STATE_CONFIG = {
-  'initial': {
-    allowedTransitions: ['whatsapp', 'matrix'],
+  'welcome': {
+    allowedTransitions: ['protocol_selection'],
     validationRules: [],
     onEnter: async () => {
-      logger.info('[OnboardingService] Entering initial state');
+      logger.info('[OnboardingService] Entering welcome state');
     },
     onExit: async () => {
-      logger.info('[OnboardingService] Exiting initial state');
+      logger.info('[OnboardingService] Exiting welcome state');
+    }
+  },
+  'protocol_selection': {
+    allowedTransitions: ['matrix'],
+    validationRules: [],
+    onEnter: async () => {
+      logger.info('[OnboardingService] Entering protocol selection');
+    },
+    onExit: async () => {
+      logger.info('[OnboardingService] Exiting protocol selection');
     }
   },
   'whatsapp': {
@@ -185,7 +195,7 @@ class OnboardingService {
     // Get state config
     const currentState = STATE_CONFIG[currentStep];
     if (!currentState) {
-      const validInitialSteps = ['initial', 'whatsapp', 'matrix'];
+      const validInitialSteps = ['welcome', 'protocol_selection', 'whatsapp', 'matrix'];
       const isValid = validInitialSteps.includes(nextStep);
       logger.debug('[OnboardingService] Validating initial step:', { nextStep, isValid });
       return isValid;

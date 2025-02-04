@@ -1,34 +1,76 @@
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, createAction } from '@reduxjs/toolkit';
 import { supabase } from '../../utils/supabase';
 import api from '../../utils/api';
 import logger from '../../utils/logger';
 
-const ONBOARDING_STEPS = {
+export const ONBOARDING_ROUTES = {
+  WELCOME: '/onboarding/welcome',
+  PROTOCOL_SELECTION: '/onboarding/protocol_selection',
+  MATRIX: '/onboarding/matrix',
+  WHATSAPP: '/onboarding/whatsapp',
+  COMPLETE: '/onboarding/complete'
+};
+
+export const ONBOARDING_STEPS = {
   WELCOME: 'welcome',
   PROTOCOL_SELECTION: 'protocol_selection',
-  MATRIX_SETUP: 'matrix_setup',
-  WHATSAPP_SETUP: 'whatsapp_setup',
+  MATRIX: 'matrix',
+  WHATSAPP: 'whatsapp',
   COMPLETE: 'complete'
 };
 
+const PROTOCOLS = {
+  MATRIX: 'matrix',
+  DIRECT_API: 'direct_api'
+};
+
+export const PLATFORMS = {
+  MATRIX: {
+    id: 'matrix',
+    protocol: PROTOCOLS.MATRIX,
+    required: true
+  },
+  WHATSAPP: {
+    id: 'whatsapp',
+    protocol: PROTOCOLS.MATRIX,
+    required: true
+  },
+  DISCORD: {
+    id: 'discord',
+    protocol: PROTOCOLS.DIRECT_API,
+    required: false
+  }
+};
+
+const initialState = {
+  currentStep: 'welcome',
+  loading: false,
+  error: null,
+  matrixConnected: false,
+  whatsappConnected: false,
+  isComplete: false,
+  connectedPlatforms: [],
+  whatsappSetup: {
+    loading: false,
+    error: null,
+    qrCode: null,
+    setupState: 'preparing',
+    timeLeft: 300,
+    qrExpired: false,
+    bridgeRoomId: null,
+    phoneNumber: null
+  }
+};
+
+// Async thunks
 export const fetchOnboardingStatus = createAsyncThunk(
   'onboarding/fetchStatus',
   async (_, { rejectWithValue }) => {
     try {
-      const { data: response, error } = await api.get('/user/onboarding-status');
-
-      if (error) throw error;
-
-      return {
-        currentStep: response?.currentStep || ONBOARDING_STEPS.WELCOME,
-        matrixConnected: response?.matrixConnected || false,
-        whatsappConnected: response?.whatsappConnected || false,
-        isComplete: response?.isComplete || false,
-        connectedPlatforms: response?.connectedPlatforms || []
-      };
+      const response = await api.get('/user/onboarding-status');
+      return response.data;
     } catch (error) {
-      logger.error('[Onboarding] Error fetching status:', error);
-      return rejectWithValue(error.message);
+      return rejectWithValue(error.response?.data || error.message);
     }
   }
 );
@@ -37,39 +79,72 @@ export const updateOnboardingStep = createAsyncThunk(
   'onboarding/updateStep',
   async ({ step, data = {} }, { rejectWithValue }) => {
     try {
-      const response = await api.post('/user/onboarding-status', {
+      await api.post('/user/onboarding-status', {
         currentStep: step,
         ...data
       });
-
-      if (response.error) throw response.error;
-
-      return { 
-        step,
-        ...response.data
-      };
+      return { step, data };
     } catch (error) {
-      logger.error('[Onboarding] Error updating step:', error);
-      return rejectWithValue(error.message);
+      return rejectWithValue(error.response?.data || error.message);
     }
   }
 );
 
+export const setWhatsappPhoneNumber = createAction('onboarding/setWhatsappPhoneNumber');
+
 const onboardingSlice = createSlice({
   name: 'onboarding',
-  initialState: {
-    currentStep: ONBOARDING_STEPS.WELCOME,
-    matrixConnected: false,
-    whatsappConnected: false,
-    completedSteps: [],
-    loading: false,
-    error: null
-  },
+  initialState,
   reducers: {
-    resetOnboarding: (state) => {
-      state.currentStep = ONBOARDING_STEPS.WELCOME;
-      state.completedSteps = [];
-      state.error = null;
+    setOnboardingError: (state, action) => {
+      state.error = action.payload;
+    },
+    setWhatsappQRCode: (state, action) => {
+      state.whatsappSetup.qrCode = action.payload;
+      state.whatsappSetup.timeLeft = 300;
+      state.whatsappSetup.qrExpired = false;
+      state.whatsappSetup.error = null;
+      state.whatsappSetup.loading = false;
+      if (state.whatsappSetup.setupState === 'waiting_for_qr') {
+        state.whatsappSetup.setupState = 'qr_ready';
+      }
+    },
+    setWhatsappSetupState: (state, action) => {
+      state.whatsappSetup.setupState = action.payload;
+      // Update loading state based on setupState
+      state.whatsappSetup.loading = ['preparing', 'waiting_for_qr'].includes(action.payload);
+      // Clear error when changing state (except for error state)
+      if (action.payload !== 'error') {
+        state.whatsappSetup.error = null;
+      }
+      // Update main whatsappConnected flag when setup is complete
+      if (action.payload === 'connected') {
+        state.whatsappConnected = true;
+        if (!state.connectedPlatforms.includes('whatsapp')) {
+          state.connectedPlatforms.push('whatsapp');
+        }
+      }
+    },
+    setWhatsappTimeLeft: (state, action) => {
+      state.whatsappSetup.timeLeft = action.payload;
+      if (action.payload <= 0) {
+        state.whatsappSetup.qrExpired = true;
+        state.whatsappSetup.setupState = 'error';
+        state.whatsappSetup.error = { message: 'QR Code expired. Please try again.' };
+      }
+    },
+    setWhatsappError: (state, action) => {
+      state.whatsappSetup.error = action.payload;
+      state.whatsappSetup.setupState = 'error';
+    },
+    setBridgeRoomId: (state, action) => {
+      state.whatsappSetup.bridgeRoomId = action.payload;
+    },
+    resetWhatsappSetup: (state) => {
+      state.whatsappSetup = {
+        ...initialState.whatsappSetup,
+        setupState: 'initial'
+      };
     }
   },
   extraReducers: (builder) => {
@@ -83,31 +158,61 @@ const onboardingSlice = createSlice({
         state.currentStep = action.payload.currentStep;
         state.matrixConnected = action.payload.matrixConnected;
         state.whatsappConnected = action.payload.whatsappConnected;
-        state.completedSteps = action.payload.completedSteps;
+        state.isComplete = action.payload.isComplete;
+        state.connectedPlatforms = action.payload.connectedPlatforms;
       })
       .addCase(fetchOnboardingStatus.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload;
       })
+      .addCase(updateOnboardingStep.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
       .addCase(updateOnboardingStep.fulfilled, (state, action) => {
+        state.loading = false;
         state.currentStep = action.payload.step;
-        if (action.payload.matrixConnected !== undefined) {
-          state.matrixConnected = action.payload.matrixConnected;
+        
+        // Update connection states if provided
+        if (action.payload.data) {
+          const { data } = action.payload;
+          if (data.matrixConnected !== undefined) {
+            state.matrixConnected = data.matrixConnected;
+          }
+          if (data.whatsappConnected !== undefined) {
+            state.whatsappConnected = data.whatsappConnected;
+          }
+          if (data.isComplete !== undefined) {
+            state.isComplete = data.isComplete;
+          }
+          if (data.connectedPlatforms) {
+            state.connectedPlatforms = data.connectedPlatforms;
+          }
         }
-        if (action.payload.whatsappConnected !== undefined) {
-          state.whatsappConnected = action.payload.whatsappConnected;
-        }
-        if (!state.completedSteps.includes(action.payload.step)) {
-          state.completedSteps.push(action.payload.step);
-        }
+      })
+      .addCase(updateOnboardingStep.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      })
+      .addCase(setWhatsappPhoneNumber, (state, action) => {
+        state.whatsappSetup.phoneNumber = action.payload;
       });
   }
 });
 
-export const { resetOnboarding } = onboardingSlice.actions;
-export const selectOnboarding = (state) => state.onboarding;
-export const selectCurrentStep = (state) => state.onboarding.currentStep;
-export const selectIsStepCompleted = (step) => (state) => 
-  state.onboarding.completedSteps.includes(step);
+// Export all actions individually for clarity
+export const {
+  setOnboardingError,
+  setWhatsappQRCode,
+  setWhatsappSetupState,
+  setWhatsappTimeLeft,
+  setWhatsappError,
+  setBridgeRoomId,
+  resetWhatsappSetup
+} = onboardingSlice.actions;
+
+// Selectors
+export const selectOnboardingState = (state) => state.onboarding;
+export const selectWhatsappSetup = (state) => state.onboarding.whatsappSetup;
 
 export default onboardingSlice.reducer; 
