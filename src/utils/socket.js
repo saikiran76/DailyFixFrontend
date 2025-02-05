@@ -756,6 +756,6 @@ class SocketManager {
 }
 
 // Create singleton instance
-const socketManager = new SocketManager(); 
+const socketManager = new SocketManager();
 
 export default socketManager; 

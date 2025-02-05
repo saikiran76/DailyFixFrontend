@@ -290,15 +290,15 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         <p className="mt-4 text-gray-400">Establishing secure connection...</p>
         <p className="mt-2 text-sm text-gray-500">This may take a few moments</p>
         {showRetryButton && (
-          <button
-            onClick={() => {
+        <button
+          onClick={() => {
               setShowRetryButton(false);
               handleConnect();
-            }}
+          }}
             className="mt-6 px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors"
-          >
+        >
             Retry Connection
-          </button>
+        </button>
         )}
       </div>
     );
@@ -311,7 +311,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         <h2 className="text-2xl font-bold mb-6 text-white">Connect WhatsApp</h2>
         <div className="mb-4 text-primary">Time remaining: {formatTime(timeLeft)}</div>
         <div className="bg-white p-4 rounded-lg mb-8 inline-block">
-          <img src={qrCode} alt="WhatsApp QR Code" className="w-64 h-64" />
+            <img src={qrCode} alt="WhatsApp QR Code" className="w-64 h-64" />
         </div>
         <div className="space-y-4 text-left">
           <p className="text-gray-300">To connect WhatsApp:</p>
@@ -321,7 +321,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
             <li>Point your phone camera at this screen</li>
             <li>Keep this window open while scanning</li>
           </ol>
-        </div>
+          </div>
         <div className="mt-6">
           <StatusDisplay />
         </div>
@@ -366,4 +366,4 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
   );
 };
 
-export default WhatsAppBridgeSetup;
+export default WhatsAppBridgeSetup; 

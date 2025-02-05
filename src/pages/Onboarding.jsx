@@ -497,7 +497,7 @@ const WhatsAppSetupStep = () => {
         // Only redirect if explicitly not connected
         if (onboardingStatus.matrixConnected === false) {
           dispatch(setOnboardingError('Matrix connection is required'));
-          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
+            await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
           navigate(ONBOARDING_ROUTES.MATRIX, { replace: true });
           return;
         }
@@ -599,7 +599,7 @@ const WhatsAppSetupStep = () => {
       ) : (
         <>
           {console.log('[WhatsAppSetupStep] Rendering WhatsAppBridgeSetup')}
-          <WhatsAppBridgeSetup onComplete={handleComplete} />
+        <WhatsAppBridgeSetup onComplete={handleComplete} />
         </>
       )}
     </div>
