@@ -405,7 +405,7 @@ const PlatformSelectionStep = ({ onNext }) => {
       }
       
       // Initiate platform connection
-      const response = await api.post(`http://localhost:3002/connect/${platform.id}/initiate`, requestData);
+      const response = await api.post(`connect/${platform.id}/initiate`, requestData);
       console.log('Platform initiation response:', response.data);
 
       // Dismiss loading toast

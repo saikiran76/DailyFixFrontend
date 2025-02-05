@@ -54,7 +54,7 @@ export const ResponseSchemas = {
 
 // Create unified API instance
 const api = axios.create({
-  baseURL: process.env.VITE_API_URL || "http://23.22.150.97:3002/",
+  baseURL: process.env.VITE_API_URL || "http://23.22.150.97:3002",
   timeout: 10000
 });
 
