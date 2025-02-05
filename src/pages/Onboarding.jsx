@@ -405,7 +405,7 @@ const PlatformSelectionStep = ({ onNext }) => {
       }
       
       // Initiate platform connection
-      const response = await api.post(`http://localhost:3002/connect/${platform.id}/initiate`, requestData);
+      const response = await api.post(`connect/${platform.id}/initiate`, requestData);
       console.log('Platform initiation response:', response.data);
 
       // Dismiss loading toast
@@ -497,7 +497,7 @@ const WhatsAppSetupStep = () => {
         // Only redirect if explicitly not connected
         if (onboardingStatus.matrixConnected === false) {
           dispatch(setOnboardingError('Matrix connection is required'));
-          await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
+            await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
           navigate(ONBOARDING_ROUTES.MATRIX, { replace: true });
           return;
         }
@@ -599,7 +599,7 @@ const WhatsAppSetupStep = () => {
       ) : (
         <>
           {console.log('[WhatsAppSetupStep] Rendering WhatsAppBridgeSetup')}
-          <WhatsAppBridgeSetup onComplete={handleComplete} />
+        <WhatsAppBridgeSetup onComplete={handleComplete} />
         </>
       )}
     </div>

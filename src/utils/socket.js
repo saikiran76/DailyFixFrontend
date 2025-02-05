@@ -5,7 +5,7 @@ import logger from './logger';
 import TokenManager from './tokenManager';
 import tokenService from '../services/tokenService';
 
-const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://localhost:3002';
+const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://23.22.150.97:3002/';
 
 // Socket connection states for better state management
 export const SOCKET_STATES = {
@@ -756,6 +756,6 @@ class SocketManager {
 }
 
 // Create singleton instance
-const socketManager = new SocketManager(); 
+const socketManager = new SocketManager();
 
 export default socketManager; 
