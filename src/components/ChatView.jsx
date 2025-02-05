@@ -256,6 +256,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       
       const response = await api.get(`/api/analysis/summary/${selectedContact.id}`);
 
+
       if (!response.data?.summary) {
         toast.success('summary: ', response?.data);
         return;
@@ -265,6 +266,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       contactId: selectedContact.id,
         summary: response.data
       });
+
       
       setSummaryData(response.data);
       setShowSummaryModal(true);
@@ -839,6 +841,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   );
 };
 
+
 // Wrap ChatView with ErrorBoundary
 export const ChatViewWithErrorBoundary = (props) => (
   <ErrorBoundary FallbackComponent={ErrorFallback}>
@@ -847,3 +850,4 @@ export const ChatViewWithErrorBoundary = (props) => (
 );
 
 export default ChatViewWithErrorBoundary;
+
