@@ -55,7 +55,12 @@ export const ResponseSchemas = {
 // Create unified API instance
 const api = axios.create({
   baseURL: process.env.VITE_API_URL || "http://23.22.150.97:3002",
-  timeout: 10000
+  timeout: 10000,
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  }
 });
 
 // Add request interceptor to set auth token
