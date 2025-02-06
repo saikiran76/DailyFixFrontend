@@ -96,7 +96,8 @@ const Dashboard = () => {
       {/* Contact List Panel */}
       <div className="w-80 bg-dark-darker border-r border-dark-lighter">
         <div className="h-full flex flex-col">
-          <div className="p-4 border-b border-dark-lighter">
+          <div className="p-4 border-b border-dark-lighter flex gap-3 items-center justify-center">
+            <img src="https://png.pngtree.com/element_our/sm/20180626/sm_5b321c99945a2.jpg" className='size-10 rounded-xl object-fill' alt="logo"/>
             <h2 className="text-lg font-semibold text-white">Contacts</h2>
           </div>
           <div className="flex-1 overflow-y-auto">

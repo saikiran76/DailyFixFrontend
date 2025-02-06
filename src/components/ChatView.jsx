@@ -605,6 +605,13 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       }
   }, [error]);
 
+  // Add effect to initialize priority when contact changes
+  useEffect(() => {
+    if (selectedContact) {
+      setPriority(selectedContact.metadata?.priority || 'medium');
+    }
+  }, [selectedContact]);
+
   // Render functions
   const renderConnectionStatus = useCallback(() => {
     switch (connectionStatus) {
@@ -654,6 +661,28 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   }, [messages, loading, error, currentUser]);
 
+  const handlePriorityChange = (priority) => {
+    if (!selectedContact) return;
+
+    // Update local state first
+    setPriority(priority);
+
+    const updatedContact = {
+      ...selectedContact,
+      metadata: {
+        ...selectedContact.metadata,
+        priority
+      }
+    };
+
+    // Update parent component if callback exists
+    if (typeof onContactUpdate === 'function') {
+      onContactUpdate(updatedContact);
+    } else {
+      logger.warn('[ChatView] onContactUpdate is not provided or not a function');
+    }
+  };
+
   if (!selectedContact) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
@@ -683,8 +712,25 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           <div>
             <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
             <div className="flex items-center space-x-2">
-            {renderConnectionStatus()}
-              <span className="text-sm text-yellow-500 ml-2">Medium Priority</span>
+              {renderConnectionStatus()}
+              <div className="relative inline-block text-left ml-2">
+                <select
+                  value={priority || selectedContact.metadata?.priority || 'medium'}
+                  onChange={(e) => handlePriorityChange(e.target.value)}
+                  className="bg-[#1e2132] text-sm rounded-md border border-gray-700 px-2 py-1 appearance-none cursor-pointer hover:bg-[#252a3f] focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                    backgroundPosition: 'right 0.5rem center',
+                    backgroundRepeat: 'no-repeat',
+                    backgroundSize: '1.5em 1.5em',
+                    paddingRight: '2.5rem'
+                  }}
+                >
+                  <option value="low" className="text-gray-300 bg-[#1e2132]">Low Priority</option>
+                  <option value="medium" className="text-yellow-500 bg-[#1e2132]">Medium Priority</option>
+                  <option value="high" className="text-red-500 bg-[#1e2132]">High Priority</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -702,7 +748,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           >
             <FiFileText className="w-5 h-5" />
           </button>
-          <button className="p-2 text-gray-400 hover:text-white transition-colors">
+          {/* <button className="p-2 text-gray-400 hover:text-white transition-colors">
             <FiVideo className="w-5 h-5" />
           </button>
           <button className="p-2 text-gray-400 hover:text-white transition-colors">
@@ -710,7 +756,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           </button>
           <button className="p-2 text-gray-400 hover:text-white transition-colors">
             <FiSearch className="w-5 h-5" />
-          </button>
+          </button> */}
         </div>
       </div>
 
