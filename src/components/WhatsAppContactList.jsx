@@ -258,12 +258,12 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   return (
     <div className="flex flex-col h-full">
       {/* Header with refresh button */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-700">
-        <h2 className="text-lg font-medium text-white">Contacts</h2>
+      <div className="flex items-center p-4 border-b border-gray-700">
+        {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
         <button
           onClick={handleRefresh}
           disabled={loading || isRefreshing}
-          className={`p-2 rounded-full transition-all duration-200 ${
+          className={`p-2 rounded-full ml-2  transition-all duration-200 text-center ${
             loading || isRefreshing 
               ? 'bg-gray-700 cursor-not-allowed' 
               : 'hover:bg-gray-700'
