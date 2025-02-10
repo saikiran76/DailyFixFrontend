@@ -2,6 +2,13 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { contactService } from '../../services/contactService';
 import logger from '../../utils/logger';
 
+// Add priority constants
+export const PRIORITY_LEVELS = {
+  HIGH: 'high',
+  MEDIUM: 'medium',
+  LOW: 'low'
+};
+
 // Async thunks
 export const fetchContacts = createAsyncThunk(
   'contacts/fetchAll',
@@ -50,20 +57,41 @@ export const syncContact = createAsyncThunk(
 //   }
 // );
 
+// Add new action for updating priority
+export const updateContactPriority = createAsyncThunk(
+  'contacts/updatePriority',
+  async ({ contactId, priority }, { rejectWithValue, getState }) => {
+    try {
+      const contact = getState().contacts.items.find(c => c.id === contactId);
+      if (!contact) {
+        throw new Error('Contact not found');
+      }
+
+      // Return the priority update
+      return { contactId, priority, timestamp: Date.now() };
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
 // Slice definition
+const initialState = {
+  items: [],
+  loading: false,
+  error: null,
+  syncStatus: {
+    inProgress: false,
+    lastSyncTime: null,
+    error: null
+  },
+  initialLoadComplete: false,
+  priorityMap: {} // New field for storing priorities
+};
+
 const contactSlice = createSlice({
   name: 'contacts',
-  initialState: {
-    items: [],
-    loading: false,
-    error: null,
-    syncStatus: {
-      inProgress: false,
-      lastSyncTime: null,
-      error: null
-    },
-    initialLoadComplete: false
-  },
+  initialState,
   reducers: {
     clearContactError: (state) => {
       state.error = null;
@@ -91,6 +119,23 @@ const contactSlice = createSlice({
         });
         state.items[contactIndex] = updatedContact;
       }
+    },
+    // Add priority update reducer
+    setPriority: (state, action) => {
+      const { contactId, priority } = action.payload;
+      state.priorityMap[contactId] = {
+        priority,
+        lastUpdated: Date.now()
+      };
+    },
+    // Add cleanup reducer
+    cleanupPriorities: (state) => {
+      const currentContactIds = new Set(state.items.map(contact => contact.id));
+      Object.keys(state.priorityMap).forEach(contactId => {
+        if (!currentContactIds.has(parseInt(contactId))) {
+          delete state.priorityMap[contactId];
+        }
+      });
     }
   },
   extraReducers: (builder) => {
@@ -148,6 +193,24 @@ const contactSlice = createSlice({
       .addCase(syncContact.rejected, (state, action) => {
         state.syncStatus.inProgress = false;
         state.syncStatus.error = action.payload || 'Failed to sync contacts';
+      })
+      // Handle priority update
+      .addCase(updateContactPriority.fulfilled, (state, action) => {
+        const { contactId, priority, timestamp } = action.payload;
+        state.priorityMap[contactId] = {
+          priority,
+          lastUpdated: timestamp
+        };
+      })
+      // Handle rehydration
+      .addCase('persist/REHYDRATE', (state, action) => {
+        if (action.payload?.contacts) {
+          // Merge existing priorities with rehydrated ones
+          state.priorityMap = {
+            ...state.priorityMap,
+            ...action.payload.contacts.priorityMap
+          };
+        }
       });
   }
 });
@@ -156,7 +219,9 @@ const contactSlice = createSlice({
 export const { 
   clearContactError, 
   clearContacts,
-  updateContactMembership 
+  updateContactMembership,
+  setPriority,
+  cleanupPriorities
 } = contactSlice.actions;
 
 // Export reducer
@@ -171,4 +236,6 @@ export const selectContactsLoading = (state) => state.contacts.loading;
 export const selectContactsError = (state) => state.contacts.error;
 export const selectLastSyncTime = (state) => state.contacts.syncStatus.lastSyncTime;
 export const selectIsSyncing = (state) => state.contacts.syncStatus.inProgress;
-export const selectInitialLoadComplete = (state) => state.contacts.initialLoadComplete; 
+export const selectInitialLoadComplete = (state) => state.contacts.initialLoadComplete;
+export const selectContactPriority = (state, contactId) => 
+  state.contacts.priorityMap[contactId]?.priority || PRIORITY_LEVELS.LOW; 

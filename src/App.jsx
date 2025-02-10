@@ -1,20 +1,21 @@
 import React from 'react';
 import { Provider } from 'react-redux';
 import { BrowserRouter } from 'react-router-dom';
+import { PersistGate } from 'redux-persist/integration/react';
+import store, { persistor } from './store/store';
+import AppRoutes from './routes/AppRoutes';
 import { Toaster } from 'react-hot-toast';
-import store from './store/store';
-import AppContent from './AppContent';
-import logger from './utils/logger';
+import LoadingSpinner from './components/LoadingSpinner';
 
 const App = () => {
-  logger.info('[App] Rendering root component');
-  
   return (
     <Provider store={store}>
-      <BrowserRouter>
-        <AppContent />
-        <Toaster position="top-right" />
-      </BrowserRouter>
+      <PersistGate loading={<LoadingSpinner />} persistor={persistor}>
+        <BrowserRouter>
+          <Toaster position="top-right" />
+          <AppRoutes />
+        </BrowserRouter>
+      </PersistGate>
     </Provider>
   );
 };

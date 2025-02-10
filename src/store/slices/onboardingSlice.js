@@ -58,7 +58,8 @@ const initialState = {
     timeLeft: 300,
     qrExpired: false,
     bridgeRoomId: null,
-    phoneNumber: null
+    phoneNumber: null,
+    realTimeSetup: false
   }
 };
 
@@ -105,6 +106,7 @@ const onboardingSlice = createSlice({
       state.whatsappSetup.qrExpired = false;
       state.whatsappSetup.error = null;
       state.whatsappSetup.loading = false;
+      // state.whatsappSetup.realTimeSetup = false;
       if (state.whatsappSetup.setupState === 'waiting_for_qr') {
         state.whatsappSetup.setupState = 'qr_ready';
       }
@@ -123,6 +125,10 @@ const onboardingSlice = createSlice({
         if (!state.connectedPlatforms.includes('whatsapp')) {
           state.connectedPlatforms.push('whatsapp');
         }
+      }
+
+      if (action.payload === 'puppet_sent') {
+        state.whatsappSetup.realTimeSetup = true;
       }
     },
     setWhatsappTimeLeft: (state, action) => {
