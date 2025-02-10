@@ -173,6 +173,10 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         if (data.bridgeRoomId) {
           dispatch(setBridgeRoomId(data.bridgeRoomId));
         }
+        if (data.state === 'puppet_sent') {
+          dispatch(setWhatsappSetupState('puppet_sent'));
+          toast.success('Real-time Setup is enabled');
+        }
       }
     };
 

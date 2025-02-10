@@ -29,7 +29,7 @@ import {
   selectMessageQueue,
   selectUnreadMessageIds
 } from '../store/slices/messageSlice';
-import { updateContactMembership } from '../store/slices/contactSlice';
+import { updateContactMembership, updateContactPriority } from '../store/slices/contactSlice';
 
 // Import environment variables
 const API_URL = import.meta.env.VITE_API_URL;
@@ -667,19 +667,22 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     // Update local state first
     setPriority(priority);
 
-    const updatedContact = {
-      ...selectedContact,
-      metadata: {
-        ...selectedContact.metadata,
-        priority
-      }
-    };
+    // Dispatch priority update to Redux
+    dispatch(updateContactPriority({ 
+      contactId: selectedContact.id, 
+      priority 
+    }));
 
     // Update parent component if callback exists
     if (typeof onContactUpdate === 'function') {
+      const updatedContact = {
+        ...selectedContact,
+        metadata: {
+          ...selectedContact.metadata,
+          priority
+        }
+      };
       onContactUpdate(updatedContact);
-    } else {
-      logger.warn('[ChatView] onContactUpdate is not provided or not a function');
     }
   };
 

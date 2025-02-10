@@ -1,4 +1,6 @@
 import { configureStore } from '@reduxjs/toolkit';
+import { persistStore, persistReducer } from 'redux-persist';
+import storage from 'redux-persist/lib/storage';
 import { authReducer } from './slices/authSlice';
 import onboardingReducer from './slices/onboardingSlice';
 import { progressReducer } from './slices/progressSlice';
@@ -7,6 +9,15 @@ import { messageReducer } from './slices/messageSlice';
 import socketReducer from './slices/socketSlice';
 import logger from '../utils/logger';
 import { tokenManager } from '../utils/tokenManager';
+
+// Configure persist for contacts
+const contactsPersistConfig = {
+  key: 'contacts',
+  storage,
+  whitelist: ['items', 'priorityMap'] // Only persist these fields
+};
+
+const persistedContactReducer = persistReducer(contactsPersistConfig, contactReducer);
 
 // Create auth state middleware
 const authMiddleware = (store) => (next) => (action) => {
@@ -80,14 +91,19 @@ const store = configureStore({
     auth: authReducer,
     onboarding: onboardingReducer,
     progress: progressReducer,
-    contacts: contactReducer,
+    contacts: persistedContactReducer,
     messages: messageReducer,
     socket: socketReducer
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
       serializableCheck: {
-        ignoredActions: ['socket/error', 'auth/setSession'],
+        ignoredActions: [
+          'socket/error', 
+          'auth/setSession',
+          'persist/PERSIST',
+          'persist/REHYDRATE'
+        ],
         ignoredPaths: ['auth.session', 'socket.instance', 'messages.items']
       }
     })
@@ -96,4 +112,5 @@ const store = configureStore({
   devTools: process.env.NODE_ENV !== 'production'
 });
 
+export const persistor = persistStore(store);
 export default store;

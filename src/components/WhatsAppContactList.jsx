@@ -3,11 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, syncContact } from '../store/slices/contactSlice';
+import { fetchContacts, syncContact, selectContactPriority, updateContactMembership } from '../store/slices/contactSlice';
 import logger from '../utils/logger';
 import SyncProgressIndicator from './SyncProgressIndicator';
 import { SYNC_STATES } from '../utils/syncUtils';
 import { getSocket, initializeSocket } from '../utils/socket';
+import { format } from 'date-fns';
+import PriorityBubble from './PriorityBubble';
+import ChatView from './ChatView';
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
@@ -27,47 +30,47 @@ const ShimmerContactList = () => (
 );
 
 const ContactItem = memo(({ contact, onClick, isSelected }) => {
-  // Generate unique key using both id and whatsapp_id
-  const contactKey = `${contact.id}-${contact.whatsapp_id}`;
-
+  const priority = useSelector(state => selectContactPriority(state, contact.id));
+  
   return (
-    <div 
-      key={contactKey}
-      onClick={() => onClick(contact)}
-      className={`flex items-center p-3 cursor-pointer hover:bg-[#24283b] ${
+    <div
+      className={`relative flex items-center px-4 py-3 cursor-pointer hover:bg-[#24283b] ${
         isSelected ? 'bg-[#24283b]' : ''
       }`}
+      onClick={onClick}
     >
-      <div className="flex items-center space-x-3">
-        <div className="relative">
-          <div className="w-10 h-10 bg-[#1e6853] rounded-full flex items-center justify-center">
-            {contact.profile_photo_url ? (
-              <img 
-                src={contact.profile_photo_url} 
-                alt={contact.display_name}
-                className="w-full h-full rounded-full object-cover"
-              />
-            ) : (
-              <span className="text-white text-lg">
-                {contact.is_group ? '👥' : contact.display_name[0].toUpperCase()}
-              </span>
-            )}
-          </div>
-        </div>
-        <div>
-          <h3 className="text-white font-medium">{contact.display_name}</h3>
-          {contact.last_message && (
-            <p className="text-sm text-gray-400 truncate max-w-[200px]">
-              {contact.last_message}
-            </p>
+      <PriorityBubble priority={priority} />
+      
+      <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center flex-shrink-0">
+        {contact.profile_photo_url ? (
+          <img
+            src={contact.profile_photo_url}
+            alt={contact.display_name}
+            className="w-full h-full rounded-full object-cover"
+          />
+        ) : (
+          <span className="text-white text-lg">
+            {contact.is_group ? '👥' : contact.display_name[0].toUpperCase()}
+          </span>
+        )}
+      </div>
+      <div className="ml-3 flex-1 min-w-0">
+        <div className="flex justify-between items-start">
+          <h3 className="text-white font-medium truncate">
+            {contact.display_name}
+          </h3>
+          {contact.last_message_at && (
+            <span className="text-xs text-gray-400 flex-shrink-0">
+              {format(new Date(contact.last_message_at), 'HH:mm')}
+            </span>
           )}
         </div>
+        {contact.last_message && (
+          <p className="text-sm text-gray-400 truncate">
+            {contact.last_message}
+          </p>
+        )}
       </div>
-      {contact.unread_count > 0 && (
-        <div className="bg-[#1e6853] text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
-          {contact.unread_count}
-        </div>
-      )}
     </div>
   );
 });
@@ -193,6 +196,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       toast.error('Failed to select contact');
     }
   }, [onContactSelect]);
+
+  const handleContactUpdate = useCallback((updatedContact) => {
+    // Dispatch update to Redux if needed
+    dispatch(updateContactMembership({ 
+      contactId: updatedContact.id, 
+      updatedContact 
+    }));
+  }, [dispatch]);
 
   useEffect(() => {
     if (!session) {
@@ -342,6 +353,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 contact={contact}
                 isSelected={contact.id === selectedContactId}
                 onClick={() => handleContactSelect(contact)}
+                onContactUpdate={handleContactUpdate}
               />
             ))}
           </div>
