@@ -31,6 +31,19 @@ export const fetchContacts = createAsyncThunk(
   }
 );
 
+// freshSync Thunk
+export const freshSyncContacts = createAsyncThunk(
+  'contacts/freshSync',
+  async (_, { rejectWithValue }) => {
+    try {
+      const result = await contactService.performFreshSync();
+      return result;
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
 export const syncContact = createAsyncThunk(
   'contacts/sync',
   async (contactId, { rejectWithValue }) => {
@@ -136,6 +149,41 @@ const contactSlice = createSlice({
           delete state.priorityMap[contactId];
         }
       });
+    },
+    addContact: (state, action) => {
+      const newContact = action.payload;
+      // Check if contact already exists
+      const existingContactIndex = state.items.findIndex(contact => contact.id === newContact.id);
+      
+      if (existingContactIndex === -1) {
+        // Add new contact with default membership if not specified
+        state.items.push({
+          ...newContact,
+          metadata: {
+            ...newContact.metadata,
+            membership: newContact.metadata?.membership || 'join'
+          }
+        });
+        logger.info('[ContactSlice] New contact added:', {
+          contactId: newContact.id,
+          displayName: newContact.display_name
+        });
+      } else {
+        // Update existing contact
+        state.items[existingContactIndex] = {
+          ...state.items[existingContactIndex],
+          ...newContact,
+          metadata: {
+            ...state.items[existingContactIndex].metadata,
+            ...newContact.metadata,
+            membership: newContact.metadata?.membership || state.items[existingContactIndex].metadata?.membership || 'join'
+          }
+        };
+        logger.info('[ContactSlice] Contact updated:', {
+          contactId: newContact.id,
+          displayName: newContact.display_name
+        });
+      }
     }
   },
   extraReducers: (builder) => {
@@ -211,6 +259,22 @@ const contactSlice = createSlice({
             ...action.payload.contacts.priorityMap
           };
         }
+      })
+      .addCase(freshSyncContacts.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+        state.isRefreshing = true;
+      })
+      .addCase(freshSyncContacts.fulfilled, (state, action) => {
+        state.loading = false;
+        state.isRefreshing = false;
+        state.items = action.payload.data || [];
+        state.lastSync = Date.now();
+      })
+      .addCase(freshSyncContacts.rejected, (state, action) => {
+        state.loading = false;
+        state.isRefreshing = false;
+        state.error = action.payload;
       });
   }
 });
@@ -221,7 +285,8 @@ export const {
   clearContacts,
   updateContactMembership,
   setPriority,
-  cleanupPriorities
+  cleanupPriorities,
+  addContact
 } = contactSlice.actions;
 
 // Export reducer

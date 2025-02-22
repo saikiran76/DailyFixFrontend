@@ -8,20 +8,65 @@ import '../styles/Login.css';
 import logger from '../utils/logger';
 import { updateSession } from '../store/slices/authSlice';
 import { toast } from 'react-toastify';
+import { FiEye, FiEyeOff } from 'react-icons/fi';
+
+const getURL = () => {
+  let url;
+  if (import.meta.env.VITE_ENV === 'production') {
+    url = import.meta.env.VITE_SITE_URL ?? 'https://daily-fix-frontend.vercel.app'
+  } else {
+    url = 'http://localhost:5173'
+  }
+  // Make sure to include `https://` when not localhost.
+  url = url.startsWith('http') ? url : `https://${url}`
+  // Make sure to include a trailing `/`.
+  url = url.endsWith('/') ? url : `${url}/`
+  return url
+}
 
 const Signup = () => {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [verificationRequired, setVerificationRequired] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const navigate = useNavigate();
   const dispatch = useDispatch();
+
+  const validateForm = () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      setError('First and last name are required');
+      return false;
+    }
+    if (!email.trim() || !email.includes('@')) {
+      setError('Please enter a valid email address');
+      return false;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters long');
+      return false;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return false;
+    }
+    return true;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setVerificationRequired(false);
+
+    if (!validateForm()) {
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -35,7 +80,8 @@ const Signup = () => {
           data: {
             first_name: firstName,
             last_name: lastName
-          }
+          },
+          emailRedirectTo: `${getURL()}login`
         }
       });
 
@@ -52,7 +98,7 @@ const Signup = () => {
       if (data?.user?.identities?.length === 0) {
         logger.info('[Signup] Email confirmation required');
         toast.info('Email verification required! Please check your inbox.');
-        setError('Please check your email inbox to verify your account. Redirecting to login...');
+        setVerificationRequired(true);
         setTimeout(() => {
           navigate('/login');
         }, 5500);
@@ -88,7 +134,11 @@ const Signup = () => {
       }
     } catch (error) {
       logger.error('[Signup] Error during signup:', error);
-      setError(error.message || 'Signup failed. Please try again.');
+      if (error.message.includes('email confirmation')) {
+        setVerificationRequired(true);
+      } else {
+        setError(error.message || 'Signup failed. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -98,7 +148,22 @@ const Signup = () => {
     <div className="min-h-screen flex items-center justify-center bg-dark">
       <div className="max-w-md w-full bg-dark-lighter p-8 rounded-lg shadow-lg">
         <h2 className="text-2xl font-bold text-white mb-6 text-center">Sign Up</h2>
-        {error && (
+        {verificationRequired ? (
+          <div className="bg-green-500/10 border border-green-500 text-green-500 p-4 rounded mb-4">
+            <div className="flex items-center space-x-3">
+              <img 
+                src="https://cdn4.iconfinder.com/data/icons/social-media-logos-6/512/112-gmail_email_mail-512.png" 
+                alt="Gmail" 
+                className="w-12 h-10 object-contain"
+              />
+              <div>
+                <p className="font-medium">Verification email sent!</p>
+                <p className="text-sm">Please check your email inbox to verify your account.</p>
+                <p className="text-sm">Redirecting to login page...</p>
+              </div>
+            </div>
+          </div>
+        ) : error && (
           <div className="bg-red-500/10 border border-red-500 text-red-500 p-3 rounded mb-4">
             {error}
           </div>
@@ -134,15 +199,55 @@ const Signup = () => {
               required
             />
           </div>
-          <div>
+          <div className="relative">
             <input
-              type="password"
+              type={showPassword ? "text" : "password"}
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-3 bg-dark border border-gray-700 rounded text-white"
+              className="w-full p-3 bg-dark border border-gray-700 rounded text-white pr-10"
               required
+              minLength={6}
             />
+            <div className="absolute inset-y-0 right-0 flex items-center">
+              <button
+                type="button"
+                tabIndex="-1"
+                className="px-2 focus:outline-none text-gray-400 hover:text-gray-300"
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? (
+                  <FiEyeOff className="h-4 w-4" />
+                ) : (
+                  <FiEye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </div>
+          <div className="relative">
+            <input
+              type={showConfirmPassword ? "text" : "password"}
+              placeholder="Confirm Password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full p-3 bg-dark border border-gray-700 rounded text-white pr-10"
+              required
+              minLength={6}
+            />
+            <div className="absolute inset-y-0 right-0 flex items-center">
+              <button
+                type="button"
+                tabIndex="-1"
+                className="px-2 focus:outline-none text-gray-400 hover:text-gray-300"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              >
+                {showConfirmPassword ? (
+                  <FiEyeOff className="h-4 w-4" />
+                ) : (
+                  <FiEye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
           </div>
           <button
             type="submit"
@@ -154,6 +259,80 @@ const Signup = () => {
         </form>
         <p className="text-center text-gray-400 mt-4">
           Already have an account? <Link to="/login" className="text-primary hover:text-primary/80">Login</Link>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export const ForgotPassword = () => {
+  const [email, setEmail] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage('');
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${getURL()}reset-password`,
+      });
+
+      if (error) throw error;
+
+      setMessage('Check your email for the password reset link');
+      toast.success('Password reset email sent! Please check your inbox.');
+      
+      // Redirect to login after 3 seconds
+      setTimeout(() => {
+        navigate('/login');
+      }, 3000);
+    } catch (error) {
+      logger.error('[ForgotPassword] Error:', error);
+      setMessage(error.message || 'Failed to send reset email');
+      toast.error(error.message || 'Failed to send reset email');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-dark">
+      <div className="max-w-md w-full bg-dark-lighter p-8 rounded-lg shadow-lg">
+        <h2 className="text-2xl font-bold text-white mb-6 text-center">Reset Password</h2>
+        {message && (
+          <div className={`p-4 rounded mb-4 ${
+            message.includes('Check your email') 
+              ? 'bg-green-500/10 border border-green-500 text-green-500'
+              : 'bg-red-500/10 border border-red-500 text-red-500'
+          }`}>
+            {message}
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <input
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full p-3 bg-dark border border-gray-700 rounded text-white"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full p-3 bg-primary text-white rounded hover:bg-primary/80 disabled:opacity-50"
+          >
+            {isLoading ? 'Sending...' : 'Send Reset Link'}
+          </button>
+        </form>
+        <p className="text-center text-gray-400 mt-4">
+          Remember your password? <Link to="/login" className="text-primary hover:text-primary/80">Login</Link>
         </p>
       </div>
     </div>

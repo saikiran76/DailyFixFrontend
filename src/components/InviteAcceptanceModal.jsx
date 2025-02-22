@@ -88,7 +88,7 @@ const InviteAcceptanceModal = ({ contact, onAccept, onClose }) => {
           <p className="text-gray-400 text-center text-sm">
             Invited by WhatsApp bridge bot
             <br />
-            <span className="text-xs">@whatsappbot:example-mtbr.duckdns.org</span>
+            <span className="text-xs">@whatsappbot:dfix-hsbridge.duckdns.org</span>
           </p>
         </div>
 

@@ -5,7 +5,7 @@ import { toast } from 'react-hot-toast';
 import { fetchOnboardingStatus } from '../store/slices/onboardingSlice';
 import logger from '../utils/logger';
 
-const DEFAULT_MATRIX_HOMESERVER = 'https://example-mtbr.duckdns.org';
+const DEFAULT_MATRIX_HOMESERVER = 'https://dfix-hsbridge.duckdns.org';
 
 const MatrixConnection = () => {
   const navigate = useNavigate();

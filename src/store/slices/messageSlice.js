@@ -79,6 +79,63 @@ const messageSlice = createSlice({
           messages[messageIndex].status = status;
         }
       }
+    },
+    messageReceived: (state, action) => {
+      const { contactId, message } = action.payload;
+      if (!state.items[contactId]) {
+        state.items[contactId] = [];
+      }
+      
+      // Create a unique ID if one doesn't exist
+      const messageId = message.message_id || message.id;
+      if (!messageId) {
+        logger.error('[MessageSlice] Message received without ID:', message);
+        return;
+      }
+
+      // Check for duplicates using a more comprehensive approach
+      const isDuplicate = state.items[contactId].some(existingMsg => {
+        // Check all possible ID combinations
+        const existingIds = [existingMsg.message_id, existingMsg.id].filter(Boolean);
+        const newIds = [messageId, message.id, message.message_id].filter(Boolean);
+        
+        // Check if any IDs match
+        return existingIds.some(id => newIds.includes(id)) ||
+          // Also check timestamp and content for exact matches
+          (existingMsg.timestamp === message.timestamp && 
+           existingMsg.content === message.content);
+      });
+
+      if (!isDuplicate) {
+        // Add message with normalized IDs
+        const normalizedMessage = {
+          ...message,
+          id: messageId,
+          message_id: messageId,
+          // Add received_at timestamp to help with deduplication
+          received_at: new Date().toISOString()
+        };
+        state.items[contactId].push(normalizedMessage);
+        
+        // Sort messages by timestamp
+        state.items[contactId].sort((a, b) => {
+          const dateA = new Date(a.timestamp);
+          const dateB = new Date(b.timestamp);
+          return dateA - dateB;
+        });
+
+        logger.info('[MessageSlice] New message added:', { 
+          messageId, 
+          contactId,
+          timestamp: message.timestamp 
+        });
+      } else {
+        logger.info('[MessageSlice] Duplicate message prevented:', { 
+          messageId, 
+          contactId,
+          timestamp: message.timestamp 
+        });
+      }
     }
   },
   extraReducers: (builder) => {
@@ -130,7 +187,8 @@ export const {
   clearMessages,
   addToMessageQueue,
   removeFromMessageQueue,
-  updateMessageStatus
+  updateMessageStatus,
+  messageReceived
 } = messageSlice.actions;
 
 // Export reducer

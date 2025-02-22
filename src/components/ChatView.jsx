@@ -182,6 +182,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [summaryData, setSummaryData] = useState(null);
   const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
+  const [avatarError, setAvatarError] = useState(false);
 
   // Refs
   const syncAbortController = useRef(null);
@@ -428,13 +429,33 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
     // Only clear and fetch messages if membership is 'join'
     if (selectedContact?.membership === 'join') {
+      logger.info('[ChatView] Setting up room listener for contact:', {
+        contactId: selectedContact.id,
+        membership: selectedContact.membership
+      });
+
+      // Setup room listener - LETS PAUSE THIS LISTENING FOR A WHILE - IN DEV-LVL2.3
+      api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/listen`)
+        .then(response => {
+          logger.info('[ChatView] Room listener setup successful:', {
+            contactId: selectedContact.id,
+            response: response.data
+          });
+        })
+        .catch(error => {
+          logger.error('[ChatView] Failed to setup room listener:', {
+            contactId: selectedContact.id,
+            error: error.message
+          });
+        });
+
       // Clear existing messages when contact changes
       dispatch(clearMessages());
       
       // Fetch initial messages
       dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
     }
-  }, [dispatch, selectedContact?.id, selectedContact?.metadata?.membership]);
+  }, [dispatch, selectedContact?.id, selectedContact?.membership]);
 
   // Add membership change effect
   useEffect(() => {
@@ -493,14 +514,66 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
   // Socket event handlers
   useEffect(() => {
-    if (!socket || !selectedContact?.id) return;
-
-    const handleNewMessage = (message) => {
-      if (message.contactId === selectedContact.id) {
-        logger.info('[ChatView] Received new message:', message);
-        dispatch(fetchMessages({ contactId: selectedContact.id, page: currentPage }));
-      scrollToBottom();
+    if (!socket || !selectedContact?.id || !currentUser?.id) {
+      logger.info('[ChatView] Socket or contact not ready:', {
+        hasSocket: !!socket,
+        socketId: socket?.id,
+        contactId: selectedContact?.id,
+        userId: currentUser?.id,
+        connected: socket?.connected
+      });
+      return;
     }
+
+    logger.info('[ChatView] Setting up socket event handlers:', {
+      contactId: selectedContact.id,
+      socketConnected: socket.connected,
+      socketId: socket.id,
+      rooms: socket.rooms,
+      namespace: socket.nsp
+    });
+
+    // Track processed message IDs to prevent duplicates
+    const processedMessageIds = new Set();
+
+    const handleNewMessage = (payload) => {
+      logger.info('[ChatView] Received socket message:', {
+        payload,
+        selectedContactId: selectedContact.id,
+        matches: payload.contactId === selectedContact.id,
+        socketId: socket.id,
+        rooms: socket.rooms
+      });
+
+      if (payload.contactId === selectedContact.id) {
+        const messageId = payload.message.message_id || payload.message.id;
+        
+        // Check if we've already processed this message
+        if (messageId && !processedMessageIds.has(messageId)) {
+          processedMessageIds.add(messageId);
+          
+          logger.info('[ChatView] Processing new message:', {
+            messageId: messageId,
+            content: payload.message.content,
+            timestamp: payload.message.timestamp
+          });
+
+          // Add the new message to Redux
+          dispatch({
+            type: 'messages/messageReceived',
+            payload: {
+              contactId: selectedContact.id,
+              message: payload.message
+            }
+          });
+          scrollToBottom();
+        } else {
+          logger.info('[ChatView] Skipping duplicate message:', {
+            messageId,
+            timestamp: payload.message.timestamp
+          });
+        }
+      }
     };
 
     const handleMessageUpdate = (updatedMessage) => {
@@ -514,7 +587,21 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       }
     };
 
-    socket.on('whatsapp:message:new', handleNewMessage);
+    // First authenticate
+    socket.emit('authenticate', { userId: currentUser.id });
+
+    // Then join user's room
+    const userRoom = `user:${currentUser.id}`;
+    socket.emit('join:room', userRoom);
+
+    // Remove any existing listeners first
+    socket.off('whatsapp:message');
+    socket.off('whatsapp:message:update');
+    socket.off('room:joined');
+    socket.off('room:error');
+
+    // Add new listeners
+    socket.on('whatsapp:message', handleNewMessage);
     socket.on('whatsapp:message:update', handleMessageUpdate);
 
     return () => {
@@ -688,6 +775,30 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   };
 
+  const renderAvatar = () => {
+    if (!selectedContact.avatar_url || avatarError) {
+      return (
+        <span className="text-white text-lg">
+          {(selectedContact.display_name || '?')[0].toUpperCase()}
+        </span>
+      );
+    }
+
+    // Properly construct the Matrix media URL
+    const avatarUrl = selectedContact.avatar_url.startsWith('http') 
+      ? selectedContact.avatar_url 
+      : `${import.meta.env.VITE_MATRIX_SERVER_URL}/_matrix/media/v3/download/${selectedContact.avatar_url}`;
+
+    return (
+      <img 
+        src={avatarUrl}
+        alt={selectedContact.display_name || 'Contact'}
+        className="w-full h-full rounded-full object-cover"
+        onError={() => setAvatarError(true)}
+      />
+    );
+  };
+
   if (!selectedContact) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[#1a1b26] text-gray-400">
@@ -702,17 +813,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
-            {selectedContact.avatar_url ? (
-              <img 
-                src={selectedContact.avatar_url} 
-                alt={selectedContact.display_name || 'Contact'}
-                className="w-full h-full rounded-full object-cover"
-              />
-            ) : (
-              <span className="text-white text-lg">
-                {(selectedContact.display_name || '?')[0].toUpperCase()}
-              </span>
-            )}
+            {renderAvatar()}
           </div>
           <div>
             <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
@@ -745,13 +846,14 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
             </div>
           )}
-          <button 
+          <button  
             onClick={handleSummaryClick}
             disabled={messages.length === 0 || isSummarizing}
-            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
             title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
           >
             <FiFileText className="w-5 h-5" />
+            <p>Generate summary</p>
           </button>
           {/* <button className="p-2 text-gray-400 hover:text-white transition-colors">
             <FiVideo className="w-5 h-5" />

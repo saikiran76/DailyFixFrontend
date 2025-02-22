@@ -234,6 +234,52 @@ export const useSocketConnection = (platform) => {
     return cleanupSocket;
   }, [platform, initializeSocketConnection, cleanupSocket, validateToken]);
 
+  useEffect(() => {
+    if (!socketRef.current) {
+      logger.info('[useSocketConnection] No socket instance');
+      return;
+    }
+
+    logger.info('[useSocketConnection] Setting up socket connection:', {
+      namespace: platform,
+      socketId: socketRef.current.id,
+      connected: socketRef.current.connected
+    });
+
+    const handleConnect = () => {
+      logger.info('[useSocketConnection] Socket connected:', {
+        socketId: socketRef.current.id,
+        namespace: platform
+      });
+    };
+
+    const handleDisconnect = (reason) => {
+      logger.info('[useSocketConnection] Socket disconnected:', {
+        reason,
+        socketId: socketRef.current.id,
+        namespace: platform
+      });
+    };
+
+    const handleError = (error) => {
+      logger.error('[useSocketConnection] Socket error:', {
+        error,
+        socketId: socketRef.current.id,
+        namespace: platform
+      });
+    };
+
+    socketRef.current.on('connect', handleConnect);
+    socketRef.current.on('disconnect', handleDisconnect);
+    socketRef.current.on('error', handleError);
+
+    return () => {
+      socketRef.current.off('connect', handleConnect);
+      socketRef.current.off('disconnect', handleDisconnect);
+      socketRef.current.off('error', handleError);
+    };
+  }, [platform]);
+
   return {
     socket: socketRef.current,
     isConnected,

@@ -48,7 +48,32 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
     isInitializing
   });
 
-  // Initialize socket connection if needed
+  // Add initialization logging
+  useEffect(() => {
+    logger.info('[WhatsAppBridgeSetup] Component mounted, initializing...', {
+      isInitializing,
+      hasSocket: !!socket,
+      setupState,
+      hasQRCode: !!qrCode
+    });
+
+    handleConnect();
+    setIsInitializing(false);
+
+    logger.info('[WhatsAppBridgeSetup] Initialization complete');
+  }, []); // Remove handleConnect from dependencies
+
+  // Add state change logging
+  useEffect(() => {
+    logger.info('[WhatsAppBridgeSetup] State updated:', {
+      isInitializing,
+      hasSocket: !!socket,
+      setupState,
+      hasQRCode: !!qrCode
+    });
+  }, [isInitializing, socket, setupState, qrCode]);
+
+  // Update socket initialization effect
   useEffect(() => {
     if (!socket && session?.access_token) {
       logger.info('[WhatsAppBridgeSetup] Initializing socket connection:', {
@@ -63,21 +88,18 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       logger.info('[WhatsAppBridgeSetup] Joining socket room:', userRoom);
       
       // First authenticate
-      socket.emit('authenticate', { userId: session.user.id });
+      socket.emit('authenticate', { 
+        userId: session.user.id,
+        token: session.access_token  // Add token for authentication
+      });
       
       // Then join room
       socket.emit('join:room', userRoom);
       
-      // Verify room join
-      socket.on('room:joined', (data) => {
-        logger.info('[WhatsAppBridgeSetup] Socket room joined successfully:', data);
-      });
-
-      socket.on('room:error', (error) => {
-        logger.error('[WhatsAppBridgeSetup] Socket room join error:', error);
-      });
+      // Set initializing to false once socket is ready
+      setIsInitializing(false);
     }
-  }, [socket, session?.access_token, session?.user?.id]);
+  }, [socket, session]);
 
   // Initiate WhatsApp connection using the correct API path
   const handleConnect = useCallback(async () => {
@@ -124,12 +146,6 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       }
     }
   }, [dispatch]);
-
-  // Start the connection when the component mounts
-  useEffect(() => {
-    handleConnect();
-    setIsInitializing(false);
-  }, [handleConnect]);
 
   // Enhanced socket event handlers
   useEffect(() => {
@@ -286,7 +302,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
   };
 
   // Rendering conditions
-  if (isInitializing || !socket) {
+  if ((isInitializing || !socket) && !qrCode) {
     return (
       <div className="max-w-md mx-auto p-8 text-center">
         <h2 className="text-2xl font-bold mb-6 text-white">Initializing WhatsApp Setup</h2>
@@ -310,12 +326,26 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
 
   // If we have a QR code, show it regardless of other states
   if (qrCode) {
+    logger.info('[WhatsAppBridgeSetup] Rendering QR code:', {
+      hasQRCode: !!qrCode,
+      setupState,
+      isInitializing
+    });
+    
     return (
       <div className="max-w-md mx-auto p-8 text-center">
         <h2 className="text-2xl font-bold mb-6 text-white">Connect WhatsApp</h2>
         <div className="mb-4 text-primary">Time remaining: {formatTime(timeLeft)}</div>
         <div className="bg-white p-4 rounded-lg mb-8 inline-block">
-            <img src={qrCode} alt="WhatsApp QR Code" className="w-64 h-64" />
+          <img 
+            src={qrCode} 
+            alt="WhatsApp QR Code" 
+            className="w-64 h-64"
+            onError={(e) => {
+              logger.error('[WhatsAppBridgeSetup] QR code image error:', e);
+              e.target.style.display = 'none';
+            }}
+          />
         </div>
         <div className="space-y-4 text-left">
           <p className="text-gray-300">To connect WhatsApp:</p>
@@ -325,7 +355,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
             <li>Point your phone camera at this screen</li>
             <li>Keep this window open while scanning</li>
           </ol>
-          </div>
+        </div>
         <div className="mt-6">
           <StatusDisplay />
         </div>
