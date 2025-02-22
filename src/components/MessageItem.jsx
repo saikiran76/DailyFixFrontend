@@ -1,10 +1,40 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { format } from 'date-fns';
+import logger from '../utils/logger';
 
 const MessageItem = ({ message, currentUser }) => {
   const isOwnMessage = message.sender_id === currentUser?.id;
-  const messageTime = message.created_at ? format(new Date(message.created_at), 'HH:mm') : '';
+  const messageTime = message.timestamp ? format(new Date(message.timestamp), 'HH:mm') : '';
+  
+  // Ensure we have a valid message ID
+  if (!message.message_id && !message.id) {
+    logger.error('[MessageItem] Message without ID:', message);
+    return null;
+  }
+
+  // Extract the actual content from the message
+  const getMessageContent = (content) => {
+    if (!content) return '';
+    
+    // If content is a string that looks like JSON, try to parse it
+    if (typeof content === 'string' && content.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(content);
+        return parsed.body || parsed.content || content;
+      } catch (e) {
+        return content;
+      }
+    }
+    
+    // If content is an object with body property
+    if (typeof content === 'object' && content.body) {
+      return content.body;
+    }
+    
+    // Otherwise return the content as is
+    return content;
+  };
 
   return (
     <div className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
@@ -15,7 +45,10 @@ const MessageItem = ({ message, currentUser }) => {
             : 'bg-[#24283b] text-gray-200'
         }`}
       >
-        <div className="break-words">{message.content}</div>
+        {!isOwnMessage && (
+          <div className="text-xs text-gray-400 mb-1">{message.sender_name}</div>
+        )}
+        <div className="break-words">{getMessageContent(message.content)}</div>
         <div className={`text-xs mt-1 ${isOwnMessage ? 'text-gray-300' : 'text-gray-400'}`}>
           {messageTime}
         </div>
@@ -26,14 +59,19 @@ const MessageItem = ({ message, currentUser }) => {
 
 MessageItem.propTypes = {
   message: PropTypes.shape({
-    id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
-    content: PropTypes.string.isRequired,
-    sender_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
-    created_at: PropTypes.string,
-    status: PropTypes.string
+    id: PropTypes.string,
+    message_id: PropTypes.string,
+    content: PropTypes.oneOfType([
+      PropTypes.string,
+      PropTypes.object
+    ]).isRequired,
+    sender_id: PropTypes.string.isRequired,
+    sender_name: PropTypes.string,
+    timestamp: PropTypes.string.isRequired,
+    message_type: PropTypes.string.isRequired
   }).isRequired,
   currentUser: PropTypes.shape({
-    id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired
+    id: PropTypes.string.isRequired
   })
 };
 

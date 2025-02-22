@@ -5,6 +5,8 @@ import Login from '../pages/Login';
 import Signup from '../pages/Signup';
 import Dashboard from '../pages/Dashboard';
 import Onboarding from '../pages/Onboarding';
+import { ForgotPassword } from '../pages/Signup';
+import ResetPassword from '../pages/ResetPassword';
 import logger from '../utils/logger';
 
 const AppRoutes = () => {
@@ -14,7 +16,7 @@ const AppRoutes = () => {
   // Helper function to determine where to redirect after login/signup
   const getPostAuthRedirect = () => {
     // If onboarding is complete or both platforms are connected, go to dashboard
-    if (isComplete || (matrixConnected && whatsappConnected)) {
+    if (isComplete && (matrixConnected && whatsappConnected)) {
       logger.info('[AppRoutes] Redirecting to dashboard - onboarding complete');
       return '/dashboard';
     }
@@ -46,6 +48,9 @@ const AppRoutes = () => {
           session ? <Navigate to={getPostAuthRedirect()} replace /> : <Signup />
         } 
       />
+
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       {/* Protected Routes */}
       <Route

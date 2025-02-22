@@ -5,7 +5,7 @@ import { PersistGate } from 'redux-persist/integration/react';
 import store, { persistor } from './store/store';
 import AppRoutes from './routes/AppRoutes';
 import { Toaster } from 'react-hot-toast';
-import LoadingSpinner from './components/LoadingSpinner';
+import LoadingSpinner from './components/LoadingSpinner';;
 
 const App = () => {
   return (

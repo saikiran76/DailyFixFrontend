@@ -14,6 +14,14 @@ import {
   ONBOARDING_ROUTES 
 } from '../store/slices/onboardingSlice';
 import { onboardingService } from '../services/onboardingService';
+import stepOne from '../images/Guide1.png'
+import stepTwo from '../images/Guide2.png'
+import stepThree from '../images/Guide3.png'
+import stepFour from '../images/Guide4.png'
+import stepFive from '../images/Guide5.png'
+import stepSix from '../images/Guide6.png'
+import stepSeven from '../images/Guide7.png'
+import { FiX } from 'react-icons/fi';
 
 // Onboarding steps configuration
 const ONBOARDING_STEPS = {
@@ -74,8 +82,8 @@ const getNextStep = (currentStep, connectedPlatforms = []) => {
 };
 
 // Default Matrix homeserver URL
-const DEFAULT_MATRIX_HOMESERVER = 'https://example-mtbr.duckdns.org';
-const MATRIX_SERVER_DOMAIN = 'example-mtbr.duckdns.org';
+const DEFAULT_MATRIX_HOMESERVER = 'https://dfix-hsbridge.duckdns.org';
+const MATRIX_SERVER_DOMAIN = 'dfix-hsbridge.duckdns.org';
 
 // Step components
 const WelcomeStep = ({ onNext }) => {
@@ -93,6 +101,145 @@ const WelcomeStep = ({ onNext }) => {
   );
 };
 
+const GuideModal = ({ isOpen, onClose }) => {
+  const modalRef = useRef();
+  const [currentStep, setCurrentStep] = useState(1);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (modalRef.current && !modalRef.current.contains(event.target)) {
+        onClose();
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+
+  const steps = [
+    {
+      image: stepOne,
+      description: "Click 'Sign In' on the Element website at the top of the page"
+    },
+    {
+      image: stepTwo,
+      description: "Select 'Element-web' from the available options"
+    },
+    {
+      image: stepThree,
+      description: "Click 'Create Matrix Account' to start the registration process"
+    },
+    {
+      image: stepFour,
+      description: "Replace the default homeserver with 'https://dfix-hsbridge.duckdns.org' and click 'Continue'"
+    },
+    {
+      image: stepFive,
+      description: "Enter your desired username and password, then register. You can click 'Cancel' when it tries to create keys"
+    },
+    {
+      image: stepSix,
+      description: "Once logged in to Element-web, select your profile from the top-left corner"
+    },
+    {
+      image: stepSeven,
+      description: "Copy your full username by clicking the copy icon as shown, then paste it here to login"
+    }
+  ];
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4 overflow-y-auto">
+      <div 
+        ref={modalRef}
+        className="bg-[#24283b] rounded-lg p-6 max-w-4xl w-full mx-auto my-8 space-y-6"
+      >
+        <div className="flex justify-between items-center border-b border-gray-700 pb-4">
+          <h3 className="text-xl font-medium text-white">Matrix Account Creation Guide</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            <FiX className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-8">
+          {/* Step indicator */}
+          <div className="flex justify-center gap-2">
+            {steps.map((_, index) => (
+              <button
+                key={index}
+                onClick={() => setCurrentStep(index + 1)}
+                className={`w-3 h-3 rounded-full transition-colors ${
+                  currentStep === index + 1 
+                    ? 'bg-blue-500' 
+                    : 'bg-gray-600 hover:bg-gray-500'
+                }`}
+              />
+            ))}
+          </div>
+
+          {/* Current step content */}
+          <div className="space-y-4">
+            <div className="relative aspect-video rounded-lg overflow-hidden bg-black/50">
+              <img 
+                src={steps[currentStep - 1].image} 
+                alt={`Step ${currentStep}`}
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))}
+                disabled={currentStep === 1}
+                className="px-4 py-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <div className="text-center">
+                <div className="text-lg font-medium text-white mb-2">
+                  Step {currentStep} of {steps.length}
+                </div>
+                <p className="text-gray-300">
+                  {steps[currentStep - 1].description}
+                </p>
+              </div>
+              <button
+                onClick={() => setCurrentStep(prev => Math.min(steps.length, prev + 1))}
+                disabled={currentStep === steps.length}
+                className="px-4 py-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-gray-700 pt-4 mt-6 text-center">
+          <p className="text-gray-300 text-sm">
+            Still encountering issues? Send a account creation helpline request at{' '}
+            <a 
+              href="mailto:ksknew76105@gmail.com" 
+              className="text-blue-400 hover:text-blue-300"
+            >
+              ksknew76105@gmail.com
+            </a>
+            <br />
+            Our team will create an account for you and send the credentials to your email soon. Thanks!
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MatrixSetupStep = ({ onNext }) => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -105,6 +252,7 @@ const MatrixSetupStep = ({ onNext }) => {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [showGuide, setShowGuide] = useState(false);
 
   // Clear form error when credentials change
   useEffect(() => {
@@ -172,14 +320,8 @@ const MatrixSetupStep = ({ onNext }) => {
       });
 
       if (response.data.status === 'active') {
-        await dispatch(updateOnboardingStep({ 
-          step: ONBOARDING_STEPS.WHATSAPP,
-          data: { 
-            matrixConnected: true,
-            connectedPlatforms: [...connectedPlatforms, 'matrix']
-          }
-        })).unwrap();
-
+        // The backend will handle updating the step to 'whatsapp'
+        // We just need to navigate to the next step
         toast.success('Matrix connection successful!');
         toast.dismiss(loadingToast);
         navigate('/onboarding/whatsapp');
@@ -189,151 +331,170 @@ const MatrixSetupStep = ({ onNext }) => {
         toast.dismiss(loadingToast);
       }
     } catch (error) {
-      console.error('Matrix setup error:', error);
-      const errorMessage = error.response?.data?.message || error.message;
-      setFormError(errorMessage);
-      dispatch(setOnboardingError(errorMessage));
-      toast.error('Failed to connect to Matrix. Please try again.');
+      logger.error('[MatrixSetupStep] Error:', error);
+      setFormError(error.message || 'Failed to connect to Matrix');
+      toast.error(error.message || 'Connection failed');
+      toast.dismiss(loadingToast);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-8">
-      <div className="flex items-center justify-between mb-6">
-          <button
-          onClick={handleBack}
-          className="flex items-center text-gray-400 hover:text-white transition-colors"
-          disabled={isSubmitting}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5 mr-2"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fillRule="evenodd"
-              d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
-              clipRule="evenodd"
-            />
-          </svg>
-          Back to Protocol Selection
-          </button>
-        <h2 className="text-2xl font-bold text-white">Matrix Protocol Setup</h2>
-      </div>
+    // <div className="max-w-2xl mx-auto p-8">
+    //   <div className="mt-8 text-center border-2 border-gray-200 rounded-lg p-4 mb-2">
+    //     <p className="text-sm text-gray-200">
+    //       Your Matrix account will be used to bridge with other messaging platforms.
+    //       Make sure you have access to the Matrix homeserver.
+    //     </p>
+    //     <div className="flex items-center gap-6 mt-5 ml-2">
+    //       <div>
+    //         <img src="https://element.io/blog/content/images/2020/07/Logomark---white-on-green.png" alt="Element" className="w-24 h-10" />
+    //       </div>
+    //     <ol className="list-decimal text-left list-inside mb-8 space-y-4 text-gray-400 ml-4">
+    //         <li>You can get your own Matrix account here: <a href="https://element.io/" target="_blank" rel="noopener noreferrer" className="text-primary hover:text-primary-dark">Click here and go to Signin, Element-web to create</a> with the given homeServer: <span className='text-lime-300'>https://dfix-hsbridge.duckdns.org</span></li>
+    //         <li>Create a Matrix account or sign in directly below with your userID, password directly below 🙂</li>
+    //         <li>Keep Element open to receive the invitation</li>
+    //         <li>You could come here right after you have created your Matrix account and proceed seamlessly ✨</li>
+    //         <li className='font-semibold text-red-500'><span className='font-bold mr-1'>Important:</span>After creating an account, DO NOT TRY CONNECTING TO MATRIX DIRECTLY AFTER YOU CREATE YOUR ACCOUNT! Please email us your userName of your account at 'ksknew76105@gmail.com', so that our team could provision your whatsapp permissions accordingly. After we confirm your allocation through  revert on email, You could start connecting here.</li>
+    //       </ol>
+
+    //       <button 
+    //         className='text-lg font-semibold p-4 rounded-lg bg-blue-500 text-gray-200 hover:bg-blue-600 transition-colors' 
+    //         onClick={() => setShowGuide(true)}
+    //       >
+    //         Still Confused? Click here!
+    //       </button>
+    //     </div>
+    //   </div>
+    //   <div className="flex items-center justify-between mb-6 mt-4">
+    //       <button
+    //       onClick={handleBack}
+    //       className="flex items-center text-gray-400 hover:text-white transition-colors w-auto"
+    //       disabled={isSubmitting}
+    //     >
+    //       <svg
+    //         xmlns="http://www.w3.org/2000/svg"
+    //         className="h-5 w-5 mr-2"
+    //         viewBox="0 0 20 20"
+    //         fill="currentColor"
+    //       >
+    //         <path
+    //           fillRule="evenodd"
+    //           d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z"
+    //           clipRule="evenodd"
+    //         />
+    //       </svg>
+    //       Back to Protocol Selection
+    //       </button>
+    //     <h2 className="text-2xl font-bold text-white">Matrix Protocol Setup</h2>
+    //   </div>
       
-      {formError && (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <div className="flex items-center text-red-500">
-            <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span>{formError}</span>
-          </div>
-          <p className="mt-2 text-sm text-red-400">
-            Please check your credentials and try again. Make sure you can log into Element with these credentials.
-          </p>
-        </div>
-      )}
+    //   {formError && (
+    //     <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+    //       <div className="flex items-center text-red-500">
+    //         <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+    //           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+    //         </svg>
+    //         <span>{formError}</span>
+    //       </div>
+    //       <p className="mt-2 text-sm text-red-400">
+    //         Please check your credentials and try again. Make sure you can log into Element with these credentials.
+    //       </p>
+    //     </div>
+    //   )}
       
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-400 mb-2">
-            Matrix User ID
-          </label>
-          <input
-            type="text"
-            value={matrixCredentials.userId}
-            onChange={(e) => setMatrixCredentials(prev => ({
-              ...prev,
-              userId: e.target.value
-            }))}
-            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
-              formError && !matrixCredentials.userId ? 'border-red-500' : 'border-gray-700'
-            }`}
-            placeholder="@username:example.com"
-            disabled={isSubmitting}
-            required
-          />
-        </div>
+    //   <form onSubmit={handleSubmit} className="space-y-6">
+    //     <div>
+    //       <label className="block text-sm font-medium text-gray-400 mb-2">
+    //         Matrix User ID
+    //       </label>
+    //       <input
+    //         type="text"
+    //         value={matrixCredentials.userId}
+    //         onChange={(e) => setMatrixCredentials(prev => ({
+    //           ...prev,
+    //           userId: e.target.value
+    //         }))}
+    //         className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+    //           formError && !matrixCredentials.userId ? 'border-red-500' : 'border-gray-700'
+    //         }`}
+    //         placeholder="@username:example.com"
+    //         disabled={isSubmitting}
+    //         required
+    //       />
+    //     </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-400 mb-2">
-            Password
-          </label>
-          <input
-            type="password"
-            value={matrixCredentials.password}
-            onChange={(e) => setMatrixCredentials(prev => ({
-              ...prev,
-              password: e.target.value
-            }))}
-            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
-              formError && !matrixCredentials.password ? 'border-red-500' : 'border-gray-700'
-            }`}
-            placeholder="Enter your password"
-            disabled={isSubmitting}
-            required
-          />
-        </div>
+    //     <div>
+    //       <label className="block text-sm font-medium text-gray-400 mb-2">
+    //         Password
+    //       </label>
+    //       <input
+    //         type="password"
+    //         value={matrixCredentials.password}
+    //         onChange={(e) => setMatrixCredentials(prev => ({
+    //           ...prev,
+    //           password: e.target.value
+    //         }))}
+    //         className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+    //           formError && !matrixCredentials.password ? 'border-red-500' : 'border-gray-700'
+    //         }`}
+    //         placeholder="Enter your password"
+    //         disabled={isSubmitting}
+    //         required
+    //       />
+    //     </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-400 mb-2">
-            Homeserver URL
-          </label>
-          <input
-            type="text"
-            value={matrixCredentials.homeserver}
-            onChange={(e) => setMatrixCredentials(prev => ({
-              ...prev,
-              homeserver: e.target.value
-            }))}
-            className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
-              formError && !matrixCredentials.homeserver.startsWith('http') ? 'border-red-500' : 'border-gray-700'
-            }`}
-            placeholder="https://matrix.example.com"
-            disabled={isSubmitting}
-            required
-          />
-        </div>
+    //     <div>
+    //       <label className="block text-sm font-medium text-gray-400 mb-2">
+    //         Homeserver URL
+    //       </label>
+    //       <input
+    //         type="text"
+    //         value={matrixCredentials.homeserver}
+    //         onChange={(e) => setMatrixCredentials(prev => ({
+    //           ...prev,
+    //           homeserver: e.target.value
+    //         }))}
+    //         className={`w-full p-3 bg-dark-lighter border rounded-lg text-white transition-colors ${
+    //           formError && !matrixCredentials.homeserver.startsWith('http') ? 'border-red-500' : 'border-gray-700'
+    //         }`}
+    //         placeholder="https://matrix.example.com"
+    //         disabled={isSubmitting}
+    //         required
+    //       />
+    //     </div>
 
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className={`w-full py-3 px-4 rounded-lg font-medium ${
-            isSubmitting
-              ? 'bg-primary/50 cursor-not-allowed'
-              : 'bg-primary hover:bg-primary/90'
-          } text-white transition-colors flex items-center justify-center`}
-        >
-          {isSubmitting ? (
-            <>
-              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              Connecting...
-            </>
-          ) : (
-            'Connect to Matrix'
-          )}
-        </button>
-      </form>
+    //     <button
+    //       type="submit"
+    //       disabled={isSubmitting}
+    //       className={`w-full py-3 px-4 rounded-lg font-medium ${
+    //         isSubmitting
+    //           ? 'bg-primary/50 cursor-not-allowed'
+    //           : 'bg-primary hover:bg-primary/90'
+    //       } text-white transition-colors flex items-center justify-center`}
+    //     >
+    //       {isSubmitting ? (
+    //         <>
+    //           <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    //             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+    //             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    //           </svg>
+    //           Connecting...
+    //         </>
+    //       ) : (
+    //         'Connect to Matrix'
+    //       )}
+    //     </button>
+    //   </form>
 
-      <div className="mt-8 text-center">
-        <p className="text-sm text-gray-500">
-          Your Matrix account will be used to bridge with other messaging platforms.
-          Make sure you have access to the Matrix homeserver.
-        </p>
-        <ol className="list-decimal list-inside mb-8 space-y-4 text-left text-gray-400">
-            <li>Install Element on your device if you haven't already</li>
-            <li>Create a Matrix account or sign in to your existing one</li>
-            <li>Keep Element open to receive the invitation</li>
-            <li>Click continue below to proceed</li>
-          </ol>
-        </div>
+    //   <GuideModal 
+    //     isOpen={showGuide} 
+    //     onClose={() => setShowGuide(false)} 
+    //   />
+    // </div>
+    <div className='max-w-2xl mx-auto p-8'>
+      <h1>Preparing everything!!, Setting up Whatsapp.</h1>
     </div>
   );
 };
@@ -671,7 +832,7 @@ const Onboarding = () => {
         const status = await onboardingService.getOnboardingStatus(true);
         
         // If onboarding is complete, redirect to dashboard
-        if (status.isComplete) {
+        if (status.isComplete && status.whatsappConnected && status.matrixConnected) {
           navigate('/dashboard', { replace: true });
           return;
         }

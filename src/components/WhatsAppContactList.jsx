@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, syncContact, selectContactPriority, updateContactMembership } from '../store/slices/contactSlice';
+import { fetchContacts, syncContact, selectContactPriority, updateContactMembership, freshSyncContacts, addContact } from '../store/slices/contactSlice';
 import logger from '../utils/logger';
 import SyncProgressIndicator from './SyncProgressIndicator';
 import { SYNC_STATES } from '../utils/syncUtils';
@@ -11,6 +11,55 @@ import { getSocket, initializeSocket } from '../utils/socket';
 import { format } from 'date-fns';
 import PriorityBubble from './PriorityBubble';
 import ChatView from './ChatView';
+
+const AcknowledgmentModal = ({ isOpen, onClose }) => {
+  const modalRef = React.useRef();
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (modalRef.current && !modalRef.current.contains(event.target)) {
+        onClose();
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+      <div 
+        ref={modalRef}
+        className="bg-[#24283b] rounded-lg p-6 max-w-md w-full mx-4"
+      >
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className='flex justify-center mt-2 mb-2'>
+          <img className='size-10' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
+        </div>
+        <p className="text-gray-300">
+          Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
+        </p>
+      </div>
+    </div>
+  );
+};
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
@@ -76,16 +125,18 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
 });
 
 const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
+  const contacts = useSelector((state) => state.contacts.items);
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const session = useSelector(state => state.auth.session);
-  const contacts = useSelector((state) => state.contacts.items);
   const loading = useSelector((state) => state.contacts.loading);
   const error = useSelector((state) => state.contacts.error);
   // const syncStatus = useSelector((state) => state.contacts.syncStatus);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(null);
+  const [showAcknowledgment, setShowAcknowledgment] = useState(false);
+  const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
@@ -126,30 +177,30 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const handleRefresh = async () => {
     try {
       setIsRefreshing(true);
-      setSyncProgress(null);
+      setSyncProgress({
+        state: SYNC_STATES.SYNCING,
+        message: 'Starting fresh sync...',
+        progress: 0
+      });
+
+      // Trigger fresh sync
+      const result = await dispatch(freshSyncContacts()).unwrap();
+
+      setSyncProgress({
+        state: SYNC_STATES.COMPLETED,
+        message: 'Sync completed successfully',
+        progress: 100
+      });
+
+      toast.success(result?.message || 'Contacts refreshed successfully');
+    } catch (error) {
+      setSyncProgress({
+        state: SYNC_STATES.ERROR,
+        message: error || 'Sync failed',
+        progress: 0
+      });
       
-      logger.info('[WhatsAppContactList] Refreshing contacts...');
-      const result = await dispatch(fetchContacts()).unwrap();
-      
-      if (result?.inProgress) {
-        logger.info('[WhatsAppContactList] Sync in progress during refresh');
-        setSyncProgress({
-          state: SYNC_STATES.SYNCING,
-          message: 'Syncing contacts...'
-        });
-      } else {
-      toast.success('Contacts refreshed successfully');
-      }
-    } catch (err) {
-      logger.error('[WhatsAppContactList] Refresh error:', err);
-      toast.error(err.response?.data?.message || 'Failed to refresh contacts');
-      
-      // Retry logic for refresh
-      if (!err.response || err.response.status >= 500) {
-        setTimeout(() => {
-          loadContactsWithRetry(0);
-        }, INITIAL_RETRY_DELAY);
-      }
+      toast.error(error || 'Failed to refresh contacts');
     } finally {
       setIsRefreshing(false);
     }
@@ -203,6 +254,28 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       contactId: updatedContact.id, 
       updatedContact 
     }));
+  }, [dispatch]);
+
+  useEffect(() => {
+    const socket = getSocket();
+  
+    const handleNewContact = (data) => {
+      logger.info('[WhatsAppContactList] New contact received:', {
+        contactId: data.id,
+        displayName: data.display_name
+      });
+      
+      dispatch(addContact(data));
+      toast.success(`New contact: ${data.display_name}`);
+    };
+  
+    if (socket) {
+      socket.on('whatsapp:new_contact', handleNewContact);
+  
+      return () => {
+        socket.off('whatsapp:new_contact', handleNewContact);
+      };
+    }
   }, [dispatch]);
 
   useEffect(() => {
@@ -266,100 +339,129 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     initSocket();
   }, [session, loadContactsWithRetry]);
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Header with refresh button */}
-      <div className="flex items-center p-4 border-b border-gray-700">
-        {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
-        <button
-          onClick={handleRefresh}
-          disabled={loading || isRefreshing}
-          className={`p-2 rounded-full ml-2  transition-all duration-200 text-center ${
-            loading || isRefreshing 
-              ? 'bg-gray-700 cursor-not-allowed' 
-              : 'hover:bg-gray-700'
-          }`}
-          title="Refresh contacts"
-        >
-          <svg
-            className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-        </button>
-      </div>
+  useEffect(() => {
+    const isInitialSync = !hasShownAcknowledgment && contacts.length === 1 && 
+      contacts[0]?.display_name?.toLowerCase().includes('whatsapp bridge bot');
 
-      {/* Sync Progress */}
-      {syncProgress && (
-        <div className="p-4 bg-gray-800">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-300">{syncProgress.message}</span>
+    if (isInitialSync) {
+      setShowAcknowledgment(true);
+      setHasShownAcknowledgment(true);
+    }
+  }, [hasShownAcknowledgment, contacts]);
+
+  // Filter out bridge bot and status broadcast
+  const filteredContacts = contacts.filter(contact => {
+    const displayName = contact.display_name?.toLowerCase() || '';
+    // Specifically check for bridge bot and status broadcasts
+    const isBridgeBot = displayName === 'whatsapp bridge bot';
+    const isStatusBroadcast = displayName.includes('whatsapp status') || 
+                             displayName.includes('broadcast');
+    
+    // Keep regular WhatsApp contacts (including those with (WA) suffix)
+    return !isBridgeBot && !isStatusBroadcast;
+  });
+
+  return (
+    <>
+      <AcknowledgmentModal 
+        isOpen={showAcknowledgment} 
+        onClose={() => setShowAcknowledgment(false)} 
+      />
+      
+      <div className="flex flex-col h-full">
+        {/* Header with refresh button */}
+        <div className="flex items-center p-4 border-b border-gray-700">
+          {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
+          <button
+            onClick={handleRefresh}
+            disabled={loading || isRefreshing}
+            className={`p-2 rounded-full ml-2  transition-all duration-200 text-center ${
+              loading || isRefreshing 
+                ? 'bg-gray-700 cursor-not-allowed' 
+                : 'hover:bg-gray-700'
+            }`}
+            title="Refresh contacts"
+          >
+            <svg
+              className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Sync Progress */}
+        {syncProgress && (
+          <div className="p-4 bg-gray-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-gray-300">{syncProgress.message}</span>
+              {syncProgress.progress && (
+                <span className="text-sm text-gray-400">{syncProgress.progress}%</span>
+              )}
+            </div>
             {syncProgress.progress && (
-              <span className="text-sm text-gray-400">{syncProgress.progress}%</span>
+              <div className="w-full bg-gray-700 rounded-full h-2">
+                <div 
+                  className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${syncProgress.progress}%` }}
+                />
+              </div>
             )}
           </div>
-          {syncProgress.progress && (
-            <div className="w-full bg-gray-700 rounded-full h-2">
-              <div 
-                className="bg-green-500 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${syncProgress.progress}%` }}
-              />
+        )}
+
+        {/* Contact List */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <ShimmerContactList />
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center p-4">
+              <p className="text-red-500 mb-2">Failed to load contacts: {error}</p>
+              <button 
+                onClick={() => loadContactsWithRetry()}
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          ) : !filteredContacts?.length ? (
+            <div className="flex flex-col items-center justify-center p-4">
+              <p className="text-gray-500">
+                {syncProgress ? 'Syncing contacts...' : 'Application syncs new contacts with new messages 🔃'}
+              </p>
+              {!syncProgress && (
+                <button 
+                  onClick={handleRefresh}
+                  className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                >
+                  Refresh
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="contact-list divide-y divide-gray-700">
+              {filteredContacts.map(contact => (
+                <ContactItem
+                  key={contact.id}
+                  contact={contact}
+                  isSelected={contact.id === selectedContactId}
+                  onClick={() => handleContactSelect(contact)}
+                  onContactUpdate={handleContactUpdate}
+                />
+              ))}
             </div>
           )}
         </div>
-      )}
-
-      {/* Contact List */}
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <ShimmerContactList />
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center p-4">
-            <p className="text-red-500 mb-2">Failed to load contacts: {error}</p>
-            <button 
-              onClick={() => loadContactsWithRetry()}
-              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-            >
-              Retry
-            </button>
-          </div>
-        ) : !contacts?.length ? (
-          <div className="flex flex-col items-center justify-center p-4">
-            <p className="text-gray-500">
-              {syncProgress ? 'Syncing contacts...' : 'No contacts found'}
-            </p>
-            {!syncProgress && (
-              <button 
-                onClick={handleRefresh}
-                className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-              >
-                Refresh
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="contact-list divide-y divide-gray-700">
-            {contacts.map(contact => (
-              <ContactItem
-                key={contact.id}
-                contact={contact}
-                isSelected={contact.id === selectedContactId}
-                onClick={() => handleContactSelect(contact)}
-                onContactUpdate={handleContactUpdate}
-              />
-            ))}
-          </div>
-        )}
       </div>
-    </div>
+    </>
   );
 };
 

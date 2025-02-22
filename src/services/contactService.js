@@ -132,6 +132,45 @@ class ContactService {
     }
   }
 
+  // fresh sync request - onDemand
+
+  async performFreshSync() {
+    try {
+      const state = store.getState();
+      const userId = state.auth.session?.user?.id;
+
+      if (!userId) {
+        throw new AppError(ErrorTypes.AUTH, 'No authenticated user found');
+      }
+
+      logger.info('[ContactService] Starting fresh sync for user:', userId);
+
+      // Clear existing cache
+      this.clearCache(userId);
+
+      // Make API call to fresh sync endpoint
+      const response = await api.get(`${WHATSAPP_API_PREFIX}/freshSyncContacts`);
+      
+      // Update cache with fresh data
+      if (response?.data?.data) {
+        this.cache.set(userId, {
+          contacts: response.data.data,
+          timestamp: Date.now()
+        });
+      }
+
+      logger.info('[ContactService] Fresh sync completed:', {
+        userId,
+        contactCount: response?.data?.data?.length || 0
+      });
+
+      return response.data;
+    } catch (error) {
+      logger.error('[ContactService] Fresh sync failed:', error);
+      throw handleError(error, 'Failed to perform fresh sync');
+    }
+  }
+
   /**
    * Gets sync status for a user
    */

@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, Link } from 'react-router-dom';
 import { signIn } from '../store/slices/authSlice';
 import { toast } from 'react-hot-toast';
+import { FiEye, FiEyeOff } from 'react-icons/fi';
 import logger from '../utils/logger';
 
 const Login = () => {
@@ -16,13 +17,15 @@ const Login = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState(null);
   const [attempts, setAttempts] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(null);
 
-  // Clear form error when inputs change
-  useEffect(() => {
-    if (formError) {
-      setFormError(null);
-    }
-  }, [email, password]);
+  // Removed auto-clear of error on input change so that error remains visible
+  // useEffect(() => {
+  //   if (formError) {
+  //     setFormError(null);
+  //   }
+  // }, [email, password]);
 
   useEffect(() => {
     if (session) {
@@ -55,14 +58,31 @@ const Login = () => {
     return true;
   };
 
+  const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
+    try {
+      logger.info('[Login] Fetching contacts...');
+      // Dummy fetchContacts action dispatch
+      await dispatch({ type: 'contacts/fetchContacts' }).unwrap();
+    } catch (err) {
+      logger.error('[Login] Error fetching contacts:', err);
+      if (retryCount < MAX_RETRIES) {
+        const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
+        logger.info(`[Login] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+        setTimeout(() => {
+          loadContactsWithRetry(retryCount + 1);
+        }, delay);
+      } else {
+        toast.error('Failed to load contacts after multiple attempts');
+      }
+    }
+  }, [dispatch]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
+    // Do not clear the error here—let it persist until a successful submission or manual dismissal
+    // setFormError(null);
 
-    // Clear previous errors
-    setFormError(null);
-
-    // Validate form
     if (!validateForm()) {
       return;
     }
@@ -72,7 +92,7 @@ const Login = () => {
       logger.info('[Login] Attempting sign in for:', email);
       
       // Show loading toast
-      const loadingToast = toast.loading('Signing in...');
+      // const loadingToast = toast.loading('Signing in...');
       
       // Dispatch sign in action
       const result = await dispatch(signIn({ email, password })).unwrap();
@@ -81,36 +101,41 @@ const Login = () => {
         hasSession: !!result?.session,
         hasUser: !!result?.user
       });
-
-      toast.dismiss(loadingToast);
+      // toast.dismiss(loadingToast);
       
       if (!result?.session) {
-        throw new Error('Invalid credentials');
+        throw new Error('Invalid login credentials');
+        toast.dismiss(loadingToast);
       }
 
-      // Success toast
       toast.success('Successfully signed in!');
-      
-      // Navigation will be handled by the useEffect above
-
+      // Navigation is handled by useEffect on session
     } catch (error) {
+      // toast.dismiss(loadingToast);
       setAttempts(prev => prev + 1);
       logger.error('[Login] Sign in failed:', error);
       
+      // Safely extract error message
+      const errorMsg = error?.message || String(error);
       let errorMessage = 'Failed to sign in. Please try again.';
       
-      if (error.message.includes('Invalid credentials') || error.message.includes('Invalid login')) {
-        errorMessage = 'Invalid email or password. Please try again.';
-      } else if (error.message.includes('network')) {
-        errorMessage = 'Network error. Please check your connection.';
+      if (errorMsg.includes('Invalid login credentials') || errorMsg.includes('Invalid login')) {
+        errorMessage = 'Invalid email or password. Please check your credentials.';
+      } else if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
+        errorMessage = 'Account not found. Please check your email or sign up for a new account.';
+      } else if (errorMsg.includes('network')) {
+        errorMessage = 'Network error. Please check your internet connection.';
+      } else if (errorMsg.includes('too many')) {
+        errorMessage = 'Too many login attempts. Please try again later.';
+      } else if (errorMsg.includes('not confirmed')) {
+        errorMessage = 'Email not verified. Please check your inbox and verify your email.';
       }
       
       setFormError(errorMessage);
       toast.error(errorMessage);
-
-      // If multiple failed attempts, show additional help
+      
       if (attempts >= 2) {
-        toast.error('Having trouble? Make sure you\'re using the correct email and password.', {
+        toast.error('Having trouble? Try resetting your password or contact support.', {
           duration: 5000
         });
       }
@@ -134,17 +159,22 @@ const Login = () => {
           </p>
         </div>
 
+        {/* Render the error message */}
         {formError && (
-          <div className="rounded-md bg-red-50 p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
+          <div className="rounded-md bg-red-50 p-4 mb-4">
+            <div className="flex items-center">
+              <svg className="h-5 w-5 text-red-400 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <div className="ml-3 flex-1">
+                <p className="text-sm text-red-800">{formError}</p>
               </div>
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">{formError}</h3>
-              </div>
+              <button
+                onClick={() => setFormError(null)}
+                className="text-white-800 hover:text-red-600 focus:outline-none w-auto"
+              >
+                Dismiss
+              </button>
             </div>
           </div>
         )}
@@ -170,24 +200,42 @@ const Login = () => {
                 disabled={isSubmitting}
               />
             </div>
-            <div>
+            <div className="relative">
               <label htmlFor="password" className="sr-only">
                 Password
               </label>
               <input
                 id="password"
                 name="password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 autoComplete="current-password"
                 required
                 className={`appearance-none rounded-none relative block w-full px-3 py-2 border ${
                   formError && !password ? 'border-red-300' : 'border-gray-300'
-                } placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm`}
+                } placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm pr-10`}
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={isSubmitting}
               />
+              <div className="absolute inset-y-0 right-0 flex items-center">
+                <button
+                  type="button"
+                  tabIndex="-1"
+                  className="px-2 focus:outline-none text-gray-600 hover:text-gray-800"
+                  onClick={() => setShowPassword(!showPassword)}
+                >
+                  {showPassword ? <FiEyeOff className="h-4 w-4" /> : <FiEye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="text-sm">
+              <Link to="/forgot-password" className="font-medium text-indigo-600 hover:text-indigo-500">
+                Forgot your password?
+              </Link>
             </div>
           </div>
 

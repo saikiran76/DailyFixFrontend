@@ -5,7 +5,11 @@ import logger from './logger';
 import TokenManager from './tokenManager';
 import tokenService from '../services/tokenService';
 
-const SOCKET_URL = import.meta.env.VITE_WS_URL || 'http://23.22.150.97:3002';
+// Update socket URL configuration
+const SOCKET_URL = import.meta.env.VITE_API_URL || 
+  (import.meta.env.VITE_DEV ? 'http://23.22.150.97:3002' : 'http://23.22.150.97:3002');
+
+logger.info('[Socket] Initializing with URL:', SOCKET_URL);
 
 // Socket connection states for better state management
 export const SOCKET_STATES = {
@@ -133,7 +137,13 @@ export const initializeSocket = async (options = {}) => {
           reconnectionDelay: CONNECTION_CONFIG.RECONNECTION_DELAY,
           reconnectionDelayMax: CONNECTION_CONFIG.RECONNECTION_DELAY_MAX,
           timeout: CONNECTION_CONFIG.CONNECTION_TIMEOUT,
-          transports: ['websocket', 'polling']
+          transports: ['polling', 'websocket'],  // Allow polling fallback
+          forceNew: true,
+          autoConnect: true,  // Changed to true
+          withCredentials: true,
+          extraHeaders: {
+            'Authorization': `Bearer ${tokens.accessToken}`
+          }
         });
 
         // Set up connection handlers
@@ -144,6 +154,12 @@ export const initializeSocket = async (options = {}) => {
           socketState.error = null;
           socketState.retryCount = 0;
           socketState.lastActivity = Date.now();
+          
+          // Authenticate immediately after connection
+          socketInstance.emit('authenticate', { 
+            token: tokens.accessToken,
+            userId: tokens.userId 
+          });
         });
 
         socketInstance.on('connect_error', (error) => {
