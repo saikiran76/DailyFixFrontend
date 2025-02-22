@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FiMessageSquare, FiCompass, FiSettings, FiLogOut, FiX } from 'react-icons/fi';
 import { useNavigate, useLocation } from 'react-router-dom';
 import summaryImage from '../images/summary.png'
-import dropImage from '../images/drop.png'
+import dropImage from '../images/Drop.png'
 import priorityImage from '../images/priority.png'
 
 const TutorialModal = ({ isOpen, onClose }) => {
