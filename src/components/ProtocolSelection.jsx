@@ -21,7 +21,8 @@ const ProtocolSelection = () => {
         step: ONBOARDING_STEPS.MATRIX
       })).unwrap();
 
-      // Call the auto-initialize endpoint
+      // Call the auto-initialize endpoint directly through API
+      // The headers will be automatically set by the API interceptor
       const response = await api.post('/matrix/auto-initialize');
       
       if (response.data.status !== 'active') {
@@ -47,6 +48,7 @@ const ProtocolSelection = () => {
                           error.message || 
                           'Failed to initialize connection. Please try again.';
       toast.error(errorMessage);
+      toast.dismiss(loadingToast);
     }
   };
 
