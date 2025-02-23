@@ -54,68 +54,55 @@ export const ResponseSchemas = {
 
 // Create unified API instance
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://23.22.150.97:3002',
-  timeout: 30000,
+  baseURL: import.meta.env.VITE_API_URL || "http://23.22.150.97:3002",
+  timeout: 20000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   }
 });
 
-// Request interceptor
-api.interceptors.request.use(
-  async (config) => {
-    try {
-      // Get auth data from localStorage
-      const authData = localStorage.getItem('dailyfix_auth');
-      if (authData) {
-        const { access_token } = JSON.parse(authData);
-        if (access_token) {
-          config.headers.Authorization = `Bearer ${access_token}`;
-        }
-      }
-
-      // Get Matrix device ID if exists
-      const matrixDeviceId = localStorage.getItem('matrix_device_id');
-      if (matrixDeviceId) {
-        config.headers['Matrix-Device-Id'] = matrixDeviceId;
-      }
-
-      logger.debug('[API] Request config:', {
-        url: config.url,
-        method: config.method,
-        hasAuth: !!config.headers.Authorization,
-        hasMatrixId: !!config.headers['Matrix-Device-Id']
-      });
-
-      return config;
-    } catch (error) {
-      logger.error('[API] Request interceptor error:', error);
-      return Promise.reject(error);
+// Add request interceptor to set auth token
+api.interceptors.request.use(async (config) => {
+  try {
+    // Get token from token manager
+    const token = await tokenManager.getValidToken();
+    
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
-  },
-  (error) => {
-    logger.error('[API] Request interceptor error:', error);
-    return Promise.reject(error);
+    
+    return config;
+  } catch (error) {
+    logger.info('[API] Error setting auth token:', error);
+    return config;
   }
-);
+}, (error) => {
+  return Promise.reject(error);
+});
 
-// Response interceptor
+// Add response interceptor to handle token refresh
 api.interceptors.response.use(
-  (response) => {
-    logger.debug('[API] Response:', {
-      url: response.config.url,
-      status: response.status,
-      hasData: !!response.data
-    });
-    return response;
-  },
-  (error) => {
-    logger.error('[API] Response error:', {
-      url: error.config?.url,
-      status: error.response?.status,
-      message: error.message
-    });
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        // Try to get a fresh token
+        const newToken = await tokenManager.getValidToken(null, true);
+        if (newToken) {
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          return api(originalRequest);
+        }
+      } catch (refreshError) {
+        logger.info('[API] Token refresh failed:', refreshError);
+      }
+    }
+
     return Promise.reject(error);
   }
 );
