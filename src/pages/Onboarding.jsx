@@ -87,16 +87,30 @@ const MATRIX_SERVER_DOMAIN = 'dfix-hsbridge.duckdns.org';
 
 // Step components
 const WelcomeStep = ({ onNext }) => {
+  const { loading } = useSelector(selectOnboardingState);
+  const { user } = useSelector(state => state.auth);
+
+  // console.log('WelcomeStep state log: ', currentStep)
+
+  // Only show the Get Started button if we're actually on the welcome step
+  const showGetStarted = true ? (loading === false) : false;
+
+  console.log('WelcomeStep state log-2: ', showGetStarted)
+
+
+
   return (
     <div className="max-w-2xl mx-auto text-center">
       <h1 className="text-4xl font-bold mb-6">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].title}</h1>
       <p className="text-xl mb-8">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
-      <button
-        onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
-        className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
-      >
-        Get Started
-      </button>
+      {showGetStarted && (
+        <button
+          onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
+          className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
+        >
+          Get Started
+        </button>
+      )}
     </div>
   );
 };
