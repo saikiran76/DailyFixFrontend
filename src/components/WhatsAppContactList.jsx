@@ -398,8 +398,8 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           </button>
         </div>
 
-        {/* Sync Progress */}
-        {syncProgress && (
+        {/* Sync Progress - lets disable this sync progress, this logic is a bit uneven */}
+        {/* {syncProgress && (
           <div className="p-4 bg-gray-800">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm text-gray-300">{syncProgress.message}</span>
@@ -416,7 +416,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
               </div>
             )}
           </div>
-        )}
+        )} */}
 
         {/* Contact List */}
         <div className="flex-1 overflow-y-auto">
