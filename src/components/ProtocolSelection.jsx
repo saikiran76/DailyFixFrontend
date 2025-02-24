@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useState} from 'react';
 import { useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { updateOnboardingStep, ONBOARDING_STEPS, ONBOARDING_ROUTES } from '../store/slices/onboardingSlice';
@@ -9,10 +9,12 @@ import logger from '../utils/logger';
 const ProtocolSelection = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const [load, setLoad] = useState(false);
 
   const handleWhatsAppSelection = async () => {
     try {
       // Show loading toast
+      setLoad(true)
       const loadingToast = toast.loading('Initializing connection...');
       logger.info('[ProtocolSelection] Selected WhatsApp platform');
 
@@ -39,6 +41,7 @@ const ProtocolSelection = () => {
       })).unwrap();
       
       // Success and navigate
+      setLoad(false)
       toast.success('Initiating whatsapp connection!');
       toast.dismiss(loadingToast);
       navigate(ONBOARDING_ROUTES.WHATSAPP);
@@ -68,9 +71,14 @@ const ProtocolSelection = () => {
             Available
           </div>
           
-          <h3 className="text-xl font-semibold text-gray-400 mb-2 flex items-center">
+          <h3 className={`text-xl font-semibold text-gray-400 mb-2 flex items-center ${
+              load 
+                ? 'bg-gray-700 cursor-not-allowed opacity-50'
+                : 'hover:bg-gray-700'
+            }`}>
+            {load ? 'getting ready..' : 'WhatsApp'}
             <span className="text-2xl mr-3">📱</span>
-            WhatsApp
+            
           </h3>
           
           <p className="text-gray-500 text-sm">

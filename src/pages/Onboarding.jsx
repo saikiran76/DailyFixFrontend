@@ -92,6 +92,7 @@ const MATRIX_SERVER_DOMAIN = 'dfix-hsbridge.duckdns.org';
 const WelcomeStep = ({ onNext }) => {
   const { loading } = useSelector(selectOnboardingState);
   const { user } = useSelector(state => state.auth);
+  const [transProg, setTransProg] = useState(false)
 
   // console.log('WelcomeStep state log: ', currentStep)
 
@@ -109,10 +110,14 @@ const WelcomeStep = ({ onNext }) => {
       <p className="text-xl mb-8">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
       {showGetStarted && (
         <button
-          onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
+          onClick={() => {
+            setTransProg(true)
+            onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)
+          }
+        }
           className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
         >
-          Get Started
+          {!transProg ? 'Get Started' : 'Getting Started.. Hold on!'}
         </button>
       )}
     </div>
