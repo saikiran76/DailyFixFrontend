@@ -18,7 +18,7 @@ const Login = () => {
   const [formError, setFormError] = useState(null);
   const [attempts, setAttempts] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
-  const [syncProgress, setSyncProgress] = useState(null);
+  // const [syncProgress, setSyncProgress] = useState(null);
 
   // Removed auto-clear of error on input change so that error remains visible
   // useEffect(() => {
@@ -58,24 +58,24 @@ const Login = () => {
     return true;
   };
 
-  const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
-    try {
-      logger.info('[Login] Fetching contacts...');
-      // Dummy fetchContacts action dispatch
-      await dispatch({ type: 'contacts/fetchContacts' }).unwrap();
-    } catch (err) {
-      logger.error('[Login] Error fetching contacts:', err);
-      if (retryCount < MAX_RETRIES) {
-        const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
-        logger.info(`[Login] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
-        setTimeout(() => {
-          loadContactsWithRetry(retryCount + 1);
-        }, delay);
-      } else {
-        toast.error('Failed to load contacts after multiple attempts');
-      }
-    }
-  }, [dispatch]);
+  // const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
+  //   try {
+  //     logger.info('[Login] Fetching contacts...');
+  //     // Dummy fetchContacts action dispatch
+  //     await dispatch({ type: 'contacts/fetchContacts' }).unwrap();
+  //   } catch (err) {
+  //     logger.error('[Login] Error fetching contacts:', err);
+  //     if (retryCount < MAX_RETRIES) {
+  //       const delay = INITIAL_RETRY_DELAY * Math.pow(2, retryCount);
+  //       logger.info(`[Login] Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+  //       setTimeout(() => {
+  //         loadContactsWithRetry(retryCount + 1);
+  //       }, delay);
+  //     } else {
+  //       toast.error('Failed to load contacts after multiple attempts');
+  //     }
+  //   }
+  // }, [dispatch]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -147,9 +147,40 @@ const Login = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-10 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
+        {/* How It Works Section */}
+        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
+          <h3 className="text-xl font-bold text-gray-900 mb-4">Note</h3>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <span className="bg-indigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">1</span>
+              <div className="flex-1">
+                <p className="text-gray-700">Click the site settings icon to the left of the URL above in the browser.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="bg-indigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">2</span>
+              <div className="flex-1">
+                <p className="text-gray-700">Allow 'Insecure content' setting for the site in the 'Site settings'.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="bg-indigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">3</span>
+              <div className="flex-1">
+                <p className="text-gray-700">Come back here after allowing the permission in 'Site settings' and start using the application.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="bg-indigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">4</span>
+              <div className="flex-1">
+                <p className="text-gray-700">When signing up, you'll receive a confirmation email. After clicking verify, even if you see 'unreachable', don't worry! Your account will be confirmed. Return here to login to your verified account.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Sign in to your account
+            Welcome Back to DailyFix
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
             Or{' '}
