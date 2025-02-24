@@ -65,7 +65,11 @@ const ProtocolSelection = () => {
         {/* WhatsApp - Enabled */}
         <button
           onClick={handleWhatsAppSelection}
-          className="p-6 border border-gray-700 rounded-lg bg-dark-lighter hover:bg-dark/50 transition-colors text-left relative group"
+          className={`p-6 border border-gray-700 rounded-lg bg-dark-lighter hover:bg-dark/50 transition-colors text-left relative group ${
+            load 
+              ? 'bg-gray-700 cursor-not-allowed opacity-50'
+              : 'hover:bg-gray-700'
+          }`}
         >
           <div className="absolute top-4 right-4 bg-green-500/20 text-green-500 px-3 py-1 rounded-full text-sm">
             Available
@@ -81,7 +85,11 @@ const ProtocolSelection = () => {
             
           </h3>
           
-          <p className="text-gray-500 text-sm">
+          <p className={`text-gray-500 text-sm ${
+              load 
+                ? 'bg-gray-700 cursor-not-allowed opacity-50'
+                : 'hover:bg-gray-700'
+            }`}>
             Connect your WhatsApp account to manage messages and contacts.
           </p>
         </button>

@@ -35,13 +35,13 @@ const AcknowledgmentModal = ({ isOpen, onClose }) => {
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
       <div 
         ref={modalRef}
-        className="bg-[#24283b] rounded-lg p-6 max-w-md w-full mx-4"
+        className="bg-[#24283b] rounded-lg p-6 max-w-xl w-full mx-4"
       >
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors w-auto"
+            className="text-gray-400 hover:text-white transition-colors w-auto ml-3"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -51,9 +51,36 @@ const AcknowledgmentModal = ({ isOpen, onClose }) => {
         <div className='flex justify-center mt-4 mb-4'>
           <img className='size-12' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
         </div>
-        <p className="text-gray-300">
+        <p className="text-gray-300 mb-6">
           Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
         </p>
+
+        {/* Guidelines Section */}
+        <div className="bg-[#1a1b26] rounded-lg p-4">
+          <h4 className="text-white font-medium mb-4">Guidelines:</h4>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">1</span>
+              <p className="text-white">Your incoming messages of the contacts will be tracked here</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">2</span>
+              <p className="text-white">Try sending a message to a contact or try receiving a message from a contact such that app will start syncing your contacts here real-time.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">3</span>
+              <p className="text-white">Hit the refresh icon in the list to get your contacts when/once you have the incoming messages or you've sent any message to a contact.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">4</span>
+              <p className="text-white">From there on, your contacts will be synced here whenever your contacts have incoming messages will be here in the application, so that you could use our AI based features.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">5</span>
+              <p className="text-white">Check the help/tutorial in the left to checkout the current features.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
