@@ -134,12 +134,21 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   // const syncStatus = useSelector((state) => state.contacts.syncStatus);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState(0);
   const [syncProgress, setSyncProgress] = useState(null);
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
 
+  // Add a function to check if refresh is allowed
+  const isRefreshAllowed = () => {
+    const now = Date.now();
+    const timeSinceLastRefresh = now - lastRefreshTime;
+    return timeSinceLastRefresh >= 10000; // 10 seconds in milliseconds
+  };
+
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
+      setLastRefreshTime(Date.now());
       logger.info('[WhatsAppContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts()).unwrap();
       logger.info('[Contacts fetch log from component] result: ', result);
@@ -175,8 +184,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress]);
 
   const handleRefresh = async () => {
+    if (!isRefreshAllowed()) {
+      toast.info('Please wait for atleast 10 seconds between refreshes');
+      return;
+    }
+
     try {
       setIsRefreshing(true);
+      setLastRefreshTime(Date.now());
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',
@@ -374,13 +389,13 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
           <button
             onClick={handleRefresh}
-            disabled={loading || isRefreshing}
-            className={`p-2 rounded-full ml-2  transition-all duration-200 text-center ${
-              loading || isRefreshing 
-                ? 'bg-gray-700 cursor-not-allowed' 
+            disabled={loading || isRefreshing || !isRefreshAllowed()}
+            className={`p-2 rounded-full ml-2 transition-all duration-200 text-center ${
+              loading || isRefreshing || !isRefreshAllowed()
+                ? 'bg-gray-700 cursor-not-allowed opacity-50'
                 : 'hover:bg-gray-700'
             }`}
-            title="Refresh contacts"
+            title={!isRefreshAllowed() ? 'Please wait before refreshing again' : 'Refresh contacts'}
           >
             <svg
               className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
@@ -437,14 +452,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
               <p className="text-gray-500">
                 {syncProgress ? 'Syncing contacts...' : 'Application syncs new contacts with new messages 🔃'}
               </p>
-              {!syncProgress && (
+              {/* {!syncProgress && (
                 <button 
                   onClick={handleRefresh}
                   className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
                 >
                   Refresh
                 </button>
-              )}
+              )} */}
             </div>
           ) : (
             <div className="contact-list divide-y divide-gray-700">

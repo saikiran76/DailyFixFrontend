@@ -22,6 +22,9 @@ import stepFive from '../images/Guide5.png'
 import stepSix from '../images/Guide6.png'
 import stepSeven from '../images/Guide7.png'
 import { FiX } from 'react-icons/fi';
+import DailyFix from '../images/DailyFix.png'
+
+
 
 // Onboarding steps configuration
 const ONBOARDING_STEPS = {
@@ -89,6 +92,7 @@ const MATRIX_SERVER_DOMAIN = 'dfix-hsbridge.duckdns.org';
 const WelcomeStep = ({ onNext }) => {
   const { loading } = useSelector(selectOnboardingState);
   const { user } = useSelector(state => state.auth);
+  const [transProg, setTransProg] = useState(false)
 
   // console.log('WelcomeStep state log: ', currentStep)
 
@@ -102,13 +106,18 @@ const WelcomeStep = ({ onNext }) => {
   return (
     <div className="max-w-2xl mx-auto text-center">
       <h1 className="text-4xl font-bold mb-6">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].title}</h1>
+      <img src={DailyFix} className='h-[440px] w-[400px] rounded mx-auto mb-3' alt='logo-entry'/>
       <p className="text-xl mb-8">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
       {showGetStarted && (
         <button
-          onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
+          onClick={() => {
+            setTransProg(true)
+            onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)
+          }
+        }
           className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
         >
-          Get Started
+          {!transProg ? 'Get Started' : 'Getting Started.. Hold on!'}
         </button>
       )}
     </div>
