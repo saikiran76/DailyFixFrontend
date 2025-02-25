@@ -388,13 +388,13 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
           <button
             onClick={handleRefresh}
-            disabled={loading || isRefreshing || !isRefreshAllowed()}
+            disabled={loading || isRefreshing}
             className={`p-2 rounded-full ml-2 transition-all duration-200 text-center ${
-              loading || isRefreshing || !isRefreshAllowed()
+              loading || isRefreshing 
                 ? 'bg-gray-700 cursor-not-allowed opacity-50'
                 : 'hover:bg-gray-700'
             }`}
-            title={!isRefreshAllowed() ? 'Please wait before refreshing again' : 'Refresh contacts'}
+            title='Refresh contacts'
           >
             <svg
               className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
