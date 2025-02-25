@@ -140,14 +140,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
 
   // Add a function to check if refresh is allowed
-  const isRefreshAllowed = () => {
-    const now = Date.now();
-    return now - lastManualRefreshTime >= 10000;
-  };
+  // const isRefreshAllowed = () => {
+  //   const now = Date.now();
+  //   return now - lastManualRefreshTime >= 10000;
+  // };
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
-      setLastManualRefreshTime(Date.now());
+      // setLastManualRefreshTime(Date.now());
       logger.info('[WhatsAppContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts()).unwrap();
       logger.info('[Contacts fetch log from component] result: ', result);
@@ -183,14 +183,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress]);
 
   const handleRefresh = async () => {
-    if (!isRefreshAllowed()) {
-      toast.info('Please wait for atleast 10 seconds between refreshes');
-      return;
-    }
+    // if (!isRefreshAllowed()) {
+    //   toast.info('Please wait for atleast 10 seconds between refreshes');
+    //   return;
+    // }
 
     try {
       setIsRefreshing(true);
-      setLastManualRefreshTime(Date.now());
+      // setLastManualRefreshTime(Date.now());
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',
