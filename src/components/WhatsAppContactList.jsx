@@ -134,7 +134,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   // const syncStatus = useSelector((state) => state.contacts.syncStatus);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [lastRefreshTime, setLastRefreshTime] = useState(0);
+  const [lastManualRefreshTime, setLastManualRefreshTime] = useState(0);
   const [syncProgress, setSyncProgress] = useState(null);
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
@@ -142,13 +142,12 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   // Add a function to check if refresh is allowed
   const isRefreshAllowed = () => {
     const now = Date.now();
-    const timeSinceLastRefresh = now - lastRefreshTime;
-    return timeSinceLastRefresh >= 10000; // 10 seconds in milliseconds
+    return now - lastManualRefreshTime >= 10000;
   };
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
-      setLastRefreshTime(Date.now());
+      setLastManualRefreshTime(Date.now());
       logger.info('[WhatsAppContactList] Fetching contacts...');
       const result = await dispatch(fetchContacts()).unwrap();
       logger.info('[Contacts fetch log from component] result: ', result);
@@ -191,7 +190,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
 
     try {
       setIsRefreshing(true);
-      setLastRefreshTime(Date.now());
+      setLastManualRefreshTime(Date.now());
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',

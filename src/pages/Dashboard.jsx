@@ -6,7 +6,7 @@ import TopNavPanel from '../components/TopNavPanel';
 import ChatView from '../components/ChatView';
 import api from '../utils/api';
 import { useDispatch, useSelector } from 'react-redux';
-import { fetchContacts } from '../store/slices/contactSlice';
+import { fetchContacts, selectContactById } from '../store/slices/contactSlice';
 import { connect as connectSocket } from '../store/slices/socketSlice';
 import logger from '../utils/logger';
 
@@ -93,8 +93,13 @@ const Dashboard = () => {
   const { connected: socketConnected } = useSelector(state => state.socket);
   const [selectedPlatform, setSelectedPlatform] = useState(null);
   const [accounts, setAccounts] = useState([]);
-  const [selectedContact, setSelectedContact] = useState(null);
+  const [selectedContactId, setSelectedContactId] = useState(null);
   const [showAcknowledgment, setShowAcknowledgment] = useState(true);
+
+  // Get the latest contact data from Redux store
+  const selectedContact = useSelector(state => 
+    selectedContactId ? selectContactById(state, selectedContactId) : null
+  );
 
   useEffect(() => {
     const initializeDashboard = async () => {
@@ -151,17 +156,17 @@ const Dashboard = () => {
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
     // Reset selected contact when platform changes
-    setSelectedContact(null);
+    setSelectedContactId(null);
   };
 
   const handleContactSelect = (contact) => {
     logger.info('[Dashboard] Contact selected:', contact);
-    setSelectedContact(contact);
+    setSelectedContactId(contact.id);  // Store only the ID
   };
 
   return (
     <>
-     <AcknowledgmentModal 
+      <AcknowledgmentModal 
         isOpen={showAcknowledgment} 
         onClose={() => setShowAcknowledgment(false)} 
       />
@@ -185,7 +190,7 @@ const Dashboard = () => {
             <div className="flex-1 overflow-y-auto">
               <WhatsAppContactList 
                 onContactSelect={handleContactSelect}
-                selectedContactId={selectedContact?.id}
+                selectedContactId={selectedContactId}
               />
             </div>
           </div>
@@ -204,7 +209,6 @@ const Dashboard = () => {
       </div>
     </>
   );
-  
 };
 
 export default Dashboard; 

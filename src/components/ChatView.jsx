@@ -399,23 +399,24 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   // Update invite modal effect to check original membership
   useEffect(() => {
     if (!selectedContact) return;
-
-    const membership = selectedContact?.membership;
+  
+    // Check both direct membership and metadata membership
+    const membership = selectedContact.membership || 
+                      selectedContact.metadata?.membership;
+  
     logger.info('[ChatView] Checking contact membership:', {
       contactId: selectedContact.id,
       membership
     });
-
+  
     if (membership === 'invite') {
-      logger.info('[ChatView] Showing invite modal for contact:', {
-        contactId: selectedContact.id,
-        membership
-      });
+      logger.info('[ChatView] Showing invite modal');
       setShowInviteModal(true);
     } else {
+      logger.info('[ChatView] Hiding invite modal');
       setShowInviteModal(false);
     }
-  }, [selectedContact?.id, selectedContact?.membership]);
+  }, [selectedContact?.id, selectedContact?.membership, selectedContact?.metadata?.membership]);
 
   // Effects
   useEffect(() => {

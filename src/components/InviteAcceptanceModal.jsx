@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import PropTypes from 'prop-types';
 import { useDispatch } from 'react-redux';
 import { toast } from 'react-hot-toast';
@@ -8,10 +8,12 @@ import { updateContactMembership } from '../store/slices/contactSlice';
 
 const InviteAcceptanceModal = ({ contact, onAccept, onClose }) => {
   const dispatch = useDispatch();
+  const [loading, setLoading] = useState(false)
 
   const handleAccept = async (retryCount = 0) => {
     const MAX_RETRIES = 3;
     try {
+      setLoading(true)
       const result = await api.post(`api/whatsapp-entities/contacts/${contact.id}/accept`);
       
       if (result.data) {
@@ -31,6 +33,8 @@ const InviteAcceptanceModal = ({ contact, onAccept, onClose }) => {
           updatedContact 
         }));
 
+        setLoading(false);
+
         // Update parent component
         onAccept(updatedContact);
         onClose();
@@ -39,21 +43,28 @@ const InviteAcceptanceModal = ({ contact, onAccept, onClose }) => {
         toast.success('Successfully joined the chat');
       }
     } catch (error) {
+      setLoading(false)
       logger.error('[InviteAcceptanceModal] Error accepting invite:', {
         error,
         contactId: contact.id,
         retryCount
       });
+
+      
       
       if (retryCount < MAX_RETRIES) {
         // Exponential backoff for retries
+        
         const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
         setTimeout(() => handleAccept(retryCount + 1), delay);
         
         if (retryCount > 0) {
+          setLoading(true)
           toast.loading(`Retrying... (${retryCount}/${MAX_RETRIES})`);
         }
+        setLoading(false)
       } else {
+        setLoading(false)
         const errorMessage = error.response?.data?.message || 'Failed to accept invite';
         toast.error(errorMessage);
       }
@@ -94,11 +105,16 @@ const InviteAcceptanceModal = ({ contact, onAccept, onClose }) => {
 
         {/* Buttons */}
         <div className="flex flex-col space-y-3">
+          
           <button
             onClick={() => handleAccept(0)}
-            className="w-full py-2 px-4 bg-[#1e6853] text-white rounded-lg hover:bg-[#1e6853]/90 transition-colors"
+            className={`w-full py-2 px-4 bg-[#1e6853] text-white rounded-lg hover:bg-[#1e6853]/90 transition-colors ${
+            loading
+              ? 'bg-gray-700 cursor-not-allowed opacity-50'
+              : 'hover:bg-gray-700'
+          }` }
           >
-            Accept
+            {loading ? 'hold on!..' : 'Accept'}
           </button>
           {/* <button
             onClick={onReject}

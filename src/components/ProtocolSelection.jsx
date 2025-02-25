@@ -15,7 +15,7 @@ const ProtocolSelection = () => {
     try {
       // Show loading toast
       setLoad(true)
-      const loadingToast = toast.loading('Initializing connection...');
+      // const loadingToast = toast.loading('Initializing connection...');
       logger.info('[ProtocolSelection] Selected WhatsApp platform');
 
       // First update the onboarding step to matrix
@@ -51,7 +51,7 @@ const ProtocolSelection = () => {
                           error.message || 
                           'Failed to initialize connection. Please try again.';
       toast.error(errorMessage);
-      toast.dismiss(loadingToast);
+      // toast.dismiss(loadingToast);
     }
   };
 
