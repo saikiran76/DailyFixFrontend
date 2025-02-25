@@ -213,7 +213,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         errorMessage = errorMsg;
       }
       // Show error toast
-      toast.error(errorMessage);
+      toast.success('Fresh sync stopped');
       setSyncProgress({
         state: SYNC_STATES.ERROR,
         message: errorMessage,
