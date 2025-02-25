@@ -183,42 +183,47 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress]);
 
   const handleRefresh = async () => {
-    // if (!isRefreshAllowed()) {
-    //   toast.info('Please wait for atleast 10 seconds between refreshes');
-    //   return;
-    // }
-
     try {
       setIsRefreshing(true);
-      // setLastManualRefreshTime(Date.now());
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',
         progress: 0
       });
-
+  
       // Trigger fresh sync
       const result = await dispatch(freshSyncContacts()).unwrap();
-
+  
       setSyncProgress({
         state: SYNC_STATES.COMPLETED,
         message: 'Sync completed successfully',
         progress: 100
       });
-
+  
       toast.success(result?.message || 'Contacts refreshed successfully');
     } catch (error) {
+      // Safely extract error message
+      const errorMsg = error?.message || String(error);
+      let errorMessage = 'Failed to refresh contacts.';
+  
+      // Check if error indicates a timeout
+      if (errorMsg.toLowerCase().includes('timeout')) {
+        errorMessage = 'Fresh syncing stopped due to timeout';
+      } else if (errorMsg.toLowerCase().includes('failed')) {
+        errorMessage = errorMsg;
+      }
+      // Show error toast
+      toast.error(errorMessage);
       setSyncProgress({
         state: SYNC_STATES.ERROR,
-        message: error || 'Sync failed',
+        message: errorMessage,
         progress: 0
       });
-      
-      toast.error(error || 'Failed to refresh contacts');
     } finally {
       setIsRefreshing(false);
     }
   };
+
 
   const handleContactSelect = useCallback(async (contact) => {
     try {
