@@ -158,7 +158,7 @@ const Login = () => {
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <span className="bg-indigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">2</span>
+              <span className="bg-windigo-600 text-white rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0 text-sm font-medium">2</span>
               <div className="flex-1">
                 <p className="text-gray-700">Allow 'Insecure content' setting for the site in the 'Site settings'.</p>
               </div>

@@ -125,12 +125,16 @@ const contactSlice = createSlice({
       const { contactId, updatedContact } = action.payload;
       const contactIndex = state.items.findIndex(c => c.id === contactId);
       if (contactIndex !== -1) {
-        logger.info('[ContactSlice] Updating contact membership:', {
-          contactId,
-          oldMembership: state.items[contactIndex].metadata?.membership,
-          newMembership: updatedContact.metadata?.membership
-        });
-        state.items[contactIndex] = updatedContact;
+        // Merge existing metadata with updated membership
+        state.items[contactIndex] = {
+          ...state.items[contactIndex],
+          ...updatedContact,
+          metadata: {
+            ...state.items[contactIndex].metadata,
+            ...updatedContact.metadata,
+            membership: updatedContact.membership // Ensure direct update
+          }
+        };
       }
     },
     // Add priority update reducer

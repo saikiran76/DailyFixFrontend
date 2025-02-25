@@ -159,7 +159,7 @@ const Signup = () => {
               <div>
                 <p className="font-medium">Verification email sent!</p>
                 <p className="text-sm">Please check your email inbox to verify your account.</p>
-                <p className="text-sm">Redirecting to login page...</p>
+                <p className="text-sm">You can directly login after confirmation</p>
               </div>
             </div>
           </div>
