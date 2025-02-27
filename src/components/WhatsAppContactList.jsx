@@ -11,6 +11,7 @@ import { getSocket, initializeSocket } from '../utils/socket';
 import { format } from 'date-fns';
 import PriorityBubble from './PriorityBubble';
 import ChatView from './ChatView';
+import api from '../utils/api';
 
 const AcknowledgmentModal = ({ isOpen, onClose }) => {
   const modalRef = React.useRef();
@@ -183,42 +184,47 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress]);
 
   const handleRefresh = async () => {
-    // if (!isRefreshAllowed()) {
-    //   toast.info('Please wait for atleast 10 seconds between refreshes');
-    //   return;
-    // }
-
     try {
       setIsRefreshing(true);
-      // setLastManualRefreshTime(Date.now());
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',
         progress: 0
       });
-
+  
       // Trigger fresh sync
       const result = await dispatch(freshSyncContacts()).unwrap();
-
+  
       setSyncProgress({
         state: SYNC_STATES.COMPLETED,
         message: 'Sync completed successfully',
         progress: 100
       });
-
+  
       toast.success(result?.message || 'Contacts refreshed successfully');
     } catch (error) {
+      // Safely extract error message
+      const errorMsg = error?.message || String(error);
+      let errorMessage = 'Failed to refresh contacts.';
+  
+      // Check if error indicates a timeout
+      if (errorMsg.toLowerCase().includes('timeout')) {
+        errorMessage = 'Fresh syncing stopped due to timeout';
+      } else if (errorMsg.toLowerCase().includes('failed')) {
+        errorMessage = errorMsg;
+      }
+      // Show error toast
+      toast.success('Fresh sync stopped');
       setSyncProgress({
         state: SYNC_STATES.ERROR,
-        message: error || 'Sync failed',
+        message: errorMessage,
         progress: 0
       });
-      
-      toast.error(error || 'Failed to refresh contacts');
     } finally {
       setIsRefreshing(false);
     }
   };
+
 
   const handleContactSelect = useCallback(async (contact) => {
     try {
@@ -234,9 +240,54 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
 
       // Handle different membership states
       const membership = contact?.membership;
+      
+      // Enhanced membership handling
       switch (membership) {
         case 'invite':
-          onContactSelect({ ...contact });
+          try {
+            logger.info('[WhatsAppContactList] Auto-accepting invite for contact:', contact.id);
+            const response = await api.post(
+              `/api/whatsapp-entities/contacts/${contact.id}/accept`
+            );
+            
+            if (response.data?.success) {
+              logger.info('[WhatsAppContactList] Invite accepted successfully:', {
+                contactId: contact.id,
+                response: response.data
+              });
+              
+              // Update membership in Redux
+              const updatedContact = response.data.contact || {
+                ...contact,
+                membership: 'join'
+              };
+              
+              dispatch(updateContactMembership({
+                contactId: contact.id,
+                updatedContact
+              }));
+              
+              // Pass the updated contact to parent
+              onContactSelect(updatedContact);
+            } else if (response.data?.joinedBefore) {
+              logger.info('[WhatsAppContactList] Contact was already joined:', contact.id);
+              onContactSelect({ ...contact, membership: 'join' });
+            } else {
+              // If acceptance fails, still allow selection but don't update membership
+              logger.warn('[WhatsAppContactList] Invite acceptance failed:', {
+                contactId: contact.id,
+                error: response.data?.message
+              });
+              onContactSelect({ ...contact });
+            }
+          } catch (error) {
+            logger.error('[WhatsAppContactList] Error accepting invite:', {
+              contactId: contact.id,
+              error: error.message
+            });
+            // Still allow selection even if acceptance fails
+            onContactSelect({ ...contact });
+          }
           break;
         case 'leave':
           toast.error('You have left this chat');
@@ -260,7 +311,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       logger.error('[WhatsAppContactList] Error handling contact selection:', err);
       toast.error('Failed to select contact');
     }
-  }, [onContactSelect]);
+  }, [onContactSelect, dispatch]);
 
   const handleContactUpdate = useCallback((updatedContact) => {
     // Dispatch update to Redux if needed
