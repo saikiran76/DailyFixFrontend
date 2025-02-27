@@ -59,20 +59,14 @@ const MessageItem = ({ message, currentUser }) => {
 
 MessageItem.propTypes = {
   message: PropTypes.shape({
-    id: PropTypes.string,
-    message_id: PropTypes.string,
-    content: PropTypes.oneOfType([
-      PropTypes.string,
-      PropTypes.object
-    ]).isRequired,
-    sender_id: PropTypes.string.isRequired,
-    sender_name: PropTypes.string,
-    timestamp: PropTypes.string.isRequired,
-    message_type: PropTypes.string.isRequired
+    id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    message_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+    content: PropTypes.oneOfType([PropTypes.string, PropTypes.object]).isRequired,
+    sender: PropTypes.string,
+    timestamp: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
+    status: PropTypes.string
   }).isRequired,
-  currentUser: PropTypes.shape({
-    id: PropTypes.string.isRequired
-  })
+  currentUser: PropTypes.object.isRequired
 };
 
 export default MessageItem; 

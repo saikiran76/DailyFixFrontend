@@ -13,6 +13,7 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { useSocket } from '../hooks/useSocket';
 import LoadingSpinner from './LoadingSpinner';
 import MessageItem from './MessageItem';
+import { messageService } from '../services/messageService';
 import {
   fetchMessages,
   sendMessage,
@@ -26,7 +27,11 @@ import {
   selectHasMoreMessages,
   selectCurrentPage,
   selectMessageQueue,
-  selectUnreadMessageIds
+  selectUnreadMessageIds,
+  fetchNewMessages,
+  selectNewMessagesFetching,
+  selectLastKnownMessageId,
+  selectNewMessagesError
 } from '../store/slices/messageSlice';
 import { updateContactMembership, updateContactPriority } from '../store/slices/contactSlice';
 
@@ -64,17 +69,32 @@ const INITIAL_SYNC_STATE = {
   errors: []
 };
 
-const SyncProgressIndicator = ({ syncState }) => {
-  if (!syncState || syncState.state === SYNC_STATES.PENDING) return null;
-
+const SyncProgressIndicator = ({ syncState, loadingState }) => {
   const getStatusColor = () => {
-    switch (syncState.state) {
-      case SYNC_STATES.APPROVED:
-        return 'bg-[#1e6853]';
-      case SYNC_STATES.REJECTED:
-        return 'bg-red-500';
+    if (syncState.state === SYNC_STATES.REJECTED) {
+      return 'bg-red-500';
+    } else if (syncState.state === SYNC_STATES.APPROVED) {
+      return 'bg-green-500';
+    } else {
+      return 'bg-yellow-500';
+    }
+  };
+
+  // Hide the indicator if loading is complete or sync is complete
+  if (loadingState === LOADING_STATES.COMPLETE || 
+      (syncState.state === SYNC_STATES.APPROVED && syncState.progress === 100)) {
+    return null;
+  }
+
+  // Show appropriate loading message based on state
+  const getMessage = () => {
+    switch (loadingState) {
+      case LOADING_STATES.CONNECTING:
+        return 'Connecting to chat room...';
+      case LOADING_STATES.FETCHING:
+        return 'Getting your messages...';
       default:
-        return 'bg-yellow-500';
+        return syncState.details;
     }
   };
 
@@ -82,7 +102,7 @@ const SyncProgressIndicator = ({ syncState }) => {
     <div className="absolute top-0 left-0 right-0 z-10">
       <div className="flex flex-col space-y-2 p-4 bg-[#24283b] rounded-lg shadow-lg m-4">
         <div className="flex justify-between text-sm text-gray-400">
-          <span>{syncState.details}</span>
+          <span>{getMessage()}</span>
           {syncState.state === SYNC_STATES.APPROVED && (
             <span>{syncState.processedMessages} / {syncState.totalMessages} messages</span>
           )}
@@ -143,6 +163,15 @@ const CONNECTION_STATUS = {
   CONNECTING: 'connecting'
 };
 
+// Add new loading state constant
+const LOADING_STATES = {
+  INITIAL: 'initial',
+  CONNECTING: 'connecting',
+  FETCHING: 'fetching',
+  COMPLETE: 'complete',
+  ERROR: 'error'
+};
+
 const ChatView = ({ selectedContact, onContactUpdate }) => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -158,6 +187,9 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const currentPage = useSelector(state => selectCurrentPage(state) || 0);
   const messageQueue = useSelector(state => selectMessageQueue(state) || []);
   const unreadMessageIds = useSelector(state => selectUnreadMessageIds(state) || []);
+  const isNewMessagesFetching = useSelector(selectNewMessagesFetching);
+  const lastKnownMessageId = useSelector(state => selectLastKnownMessageId(state, selectedContact?.id));
+  const newMessagesError = useSelector(selectNewMessagesError);
 
   // Local state
   const [connectionStatus, setConnectionStatus] = useState(CONNECTION_STATUS.DISCONNECTED);
@@ -181,6 +213,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const [summaryData, setSummaryData] = useState(null);
   const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
   const [avatarError, setAvatarError] = useState(false);
+  const [loadingState, setLoadingState] = useState(LOADING_STATES.INITIAL);
 
   // Refs
   const syncAbortController = useRef(null);
@@ -281,6 +314,46 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   };
 
+  const handleFetchNewMessages = async () => {
+    if (!selectedContact || isNewMessagesFetching) return;
+
+    try {
+      const lastMessage = messages[messages.length - 1];
+      // Ensure we have a valid lastEventId
+      const lastEventId = lastMessage?.message_id || lastMessage?.id;
+      
+      if (!lastEventId) {
+        toast.error('No message history available');
+        return;
+      }
+
+      // Ensure the lastEventId is a valid string or number
+      const validLastEventId = typeof lastEventId === 'string' ? lastEventId : String(lastEventId);
+      
+      const result = await dispatch(fetchNewMessages({ 
+        contactId: selectedContact.id, 
+        lastEventId: validLastEventId 
+      })).unwrap();
+
+      // Check for warning from messageService
+      if (result?.warning) {
+        toast.warn(result.warning);
+        return;
+      }
+      
+      // Scroll to bottom if new messages were added
+      if (result?.messages?.length > 0) {
+        scrollToBottom();
+        toast.success(`${result.messages.length} new message(s) received`);
+      } else {
+        toast.info('No new messages');
+      }
+    } catch (error) {
+      logger.error('[ChatView] Error fetching new messages:', error);
+      toast.error(error.message || 'Failed to fetch new messages');
+    }
+  };
+
   // Effects
   useEffect(() => {
     return () => {
@@ -291,14 +364,17 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   useEffect(() => {
     if (!selectedContact?.id) return;
 
-    // Enhanced membership handling
-    logger.info('[ChatView] Contact selected:', {
-      contactId: selectedContact.id,
-      membership: selectedContact.membership
-    });
-
-    // Only proceed with room listener and message fetching if membership is 'join'
     if (selectedContact?.membership === 'join') {
+      setLoadingState(LOADING_STATES.CONNECTING);
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.PENDING,
+        progress: 0,
+        details: 'Connecting to chat room...',
+        processedMessages: 0,
+        totalMessages: 0
+      }));
+
       logger.info('[ChatView] Setting up room listener for contact:', {
         contactId: selectedContact.id,
         membership: selectedContact.membership
@@ -311,8 +387,26 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             contactId: selectedContact.id,
             response: response.data
           });
-
-          // Clear existing messages when contact changes
+        })
+        .catch(error => {
+          logger.warn('[ChatView] Room listener setup failed, but continuing with message fetch:', {
+            contactId: selectedContact.id,
+            error: error.message
+          });
+          toast.warn('Real-time updates may be delayed but you can use the "new messages" button for new updates');
+        })
+        .finally(() => {
+          // Proceed with message fetching regardless of listener setup result
+          setLoadingState(LOADING_STATES.FETCHING);
+          setSyncState(prev => ({
+            ...prev,
+            state: SYNC_STATES.APPROVED,
+            progress: 50,
+            details: 'Getting your messages...',
+            processedMessages: 0,
+            totalMessages: 0
+          }));
+          
           dispatch(clearMessages());
           
           // Fetch initial messages
@@ -320,20 +414,38 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             contactId: selectedContact.id, 
             page: 0, 
             limit: PAGE_SIZE 
-          }));
-        })
-        .catch(error => {
-          logger.error('[ChatView] Failed to setup room listener:', {
-            contactId: selectedContact.id,
-            error: error.message
+          }))
+          .unwrap()
+          .then((result) => {
+            setLoadingState(LOADING_STATES.COMPLETE);
+            setSyncState(prev => ({
+              ...prev,
+              state: SYNC_STATES.APPROVED,
+              progress: 100,
+              details: 'Messages loaded successfully',
+              processedMessages: result.messages.length,
+              totalMessages: result.messages.length
+            }));
+          })
+          .catch(error => {
+            logger.error('[ChatView] Failed to fetch messages:', {
+              contactId: selectedContact.id,
+              error: error.message
+            });
+            setLoadingState(LOADING_STATES.ERROR);
+            setSyncState(prev => ({
+              ...prev,
+              state: SYNC_STATES.REJECTED,
+              progress: 0,
+              details: 'Failed to load messages',
+              errors: [...prev.errors, {
+                message: error.message,
+                timestamp: Date.now()
+              }]
+            }));
+            toast.error('Failed to load messages');
           });
-          toast.error('Failed to connect to chat room');
         });
-    } else {
-      logger.info('[ChatView] Contact not in joined state:', {
-        contactId: selectedContact.id,
-        membership: selectedContact.membership
-      });
     }
   }, [dispatch, selectedContact?.id, selectedContact?.membership]);
 
@@ -408,10 +520,18 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
       if (payload.contactId === selectedContact.id) {
         const messageId = payload.message.message_id || payload.message.id;
+        const normalized = messageService.normalizeMessage(payload.message);
+
+         // Check against both Redux state and local processed IDs
+        const isDuplicate = messages.some(m => 
+          m.id === normalized.id ||
+          m.message_id === normalized.message_id ||
+          m.content_hash === normalized.content_hash
+        );
         
         // Check if we've already processed this message
-        if (messageId && !processedMessageIds.has(messageId)) {
-          processedMessageIds.add(messageId);
+        if (!isDuplicate && !processedMessageIds.has(normalized.id)) {
+          processedMessageIds.add(normalized.id);
           
           logger.info('[ChatView] Processing new message:', {
             messageId: messageId,
@@ -424,7 +544,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             type: 'messages/messageReceived',
             payload: {
               contactId: selectedContact.id,
-              message: payload.message
+              message: normalized || payload.message 
             }
           });
           scrollToBottom();
@@ -512,48 +632,33 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     };
   }, [socket]);
 
-  // Add sync state effects
+  // Update the sync state effect
   useEffect(() => {
-    if (loading) {
+    if (loadingState === LOADING_STATES.FETCHING) {
       setSyncState(prev => ({
         ...prev,
         state: SYNC_STATES.APPROVED,
-        details: SYNC_STATUS_MESSAGES[SYNC_STATES.APPROVED],
+        details: 'Getting your messages...',
         progress: 50
       }));
-    } else {
+    } else if (loadingState === LOADING_STATES.COMPLETE && messages.length > 0) {
       setSyncState(prev => ({
         ...prev,
-        state: SYNC_STATES.PENDING,
-        details: SYNC_STATUS_MESSAGES[SYNC_STATES.PENDING],
-        progress: 0
+        state: SYNC_STATES.APPROVED,
+        details: 'Messages loaded successfully',
+        progress: 100,
+        processedMessages: messages.length,
+        totalMessages: messages.length
+      }));
+    } else if (loadingState === LOADING_STATES.ERROR) {
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.REJECTED,
+        details: error || 'Failed to load messages',
+        errors: [...prev.errors, { message: error || 'Failed to load messages', timestamp: Date.now() }]
       }));
     }
-  }, [loading]);
-
-  useEffect(() => {
-    if (messages.length > 0 && !loading) {
-        setSyncState(prev => ({
-          ...prev,
-        processedMessages: messages.length,
-        totalMessages: messages.length,
-        progress: 100,
-        state: SYNC_STATES.APPROVED,
-        details: 'Messages loaded successfully'
-        }));
-      }
-  }, [messages.length, loading]);
-
-  useEffect(() => {
-    if (error) {
-        setSyncState(prev => ({
-          ...prev,
-        state: SYNC_STATES.REJECTED,
-        details: `Error: ${error}`,
-        errors: [...prev.errors, { message: error, timestamp: Date.now() }]
-        }));
-      }
-  }, [error]);
+  }, [loadingState, messages.length, error]);
 
   // Add effect to initialize priority when contact changes
   useEffect(() => {
@@ -592,24 +697,42 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   }, [connectionStatus]);
 
   const renderMessages = useCallback(() => {
-    if (!messages) return null;
-    if (loading && !messages.length) return <LoadingSpinner />;
-    if (error) return <div className="text-red-500 text-center">{error}</div>;
-    if (!messages.length) return <div className="text-gray-400 text-center">No messages yet</div>;
-
-    try {
-      return messages.map((message) => (
-        <MessageItem 
-          key={message.id || message.message_id} 
-          message={message}
-          currentUser={currentUser}
-        />
-      ));
-    } catch (err) {
-      logger.error('[ChatView] Error rendering messages:', err);
-      return <div className="text-red-500 text-center">Error displaying messages</div>;
+    if (loadingState === LOADING_STATES.INITIAL || loadingState === LOADING_STATES.CONNECTING) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full">
+          <LoadingSpinner />
+          <p className="mt-4 text-gray-400">
+            {loadingState === LOADING_STATES.INITIAL ? 'Preparing chat...' : 'Connecting to chat...'}
+          </p>
+        </div>
+      );
     }
-  }, [messages, loading, error, currentUser]);
+
+    if (loadingState === LOADING_STATES.FETCHING) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full">
+          <LoadingSpinner />
+          <p className="mt-4 text-gray-400">Getting your messages...</p>
+        </div>
+      );
+    }
+
+    if (loadingState === LOADING_STATES.ERROR) {
+      return <div className="text-red-500 text-center">{error || 'Failed to load messages'}</div>;
+    }
+
+    if (!messages.length) {
+      return <div className="text-gray-400 text-center">No messages yet</div>;
+    }
+
+    return messages.map((message) => (
+      <MessageItem 
+        key={`${message.id}_${message.message_id}_${message.timestamp}`}
+        message={message}
+        currentUser={currentUser}
+      />
+    ));
+  }, [loadingState, messages, error, currentUser]);
 
   const handlePriorityChange = (priority) => {
     if (!selectedContact) return;
@@ -669,7 +792,10 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   }
 
   return (
-    <div className="flex-1 bg-[#1a1b26] flex flex-col h-full relative">
+    <div className="relative flex flex-col h-full bg-[#1a1b26]">
+      {/* Show sync progress indicator with loading state */}
+      <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
+      
       {/* Chat Header - Fixed height */}
       <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
         <div className="flex items-center space-x-3">
@@ -707,6 +833,15 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
             </div>
           )}
+          <button
+            onClick={handleFetchNewMessages}
+            disabled={isNewMessagesFetching}
+            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
+            title="Check for new messages"
+          >
+            <span className="text-xl">📩</span>
+            <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
+          </button>
           <button  
             onClick={handleSummaryClick}
             disabled={messages.length === 0 || isSummarizing}
@@ -716,20 +851,8 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             <FiFileText className="w-5 h-5" />
             <p>Generate summary</p>
           </button>
-          {/* <button className="p-2 text-gray-400 hover:text-white transition-colors">
-            <FiVideo className="w-5 h-5" />
-          </button>
-          <button className="p-2 text-gray-400 hover:text-white transition-colors">
-            <FiPhone className="w-5 h-5" />
-          </button>
-          <button className="p-2 text-gray-400 hover:text-white transition-colors">
-            <FiSearch className="w-5 h-5" />
-          </button> */}
         </div>
       </div>
-
-      {/* Sync Progress Indicator - Only show when loading or on error */}
-      {(loading || error) && <SyncProgressIndicator syncState={syncState} />}
 
       {/* Messages Area - Scrollable */}
       <div 
@@ -750,36 +873,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         {renderMessages()}
         <div ref={messagesEndRef} />
       </div>
-
-      {/* Message Input - Fixed height */}
-      {/* <div className="px-4 py-3 bg-[#24283b] border-t border-gray-700 flex-none">
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const input = e.target.elements.message;
-            const content = input.value.trim();
-            if (!content) return;
-            await handleMessageSend(content);
-              input.value = '';
-          }}
-          className="flex items-center space-x-2"
-        >
-          <input
-            type="text"
-            name="message"
-            placeholder={connectionStatus !== 'connected' ? 'Messages will be queued...' : 'Type a message...'}
-            className="flex-1 bg-[#1a1b26] text-white placeholder-gray-400 rounded-lg px-4 py-2 focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
-            disabled={loading}
-          />
-          <button
-            type="submit"
-            disabled={loading}
-            className="bg-[#1e6853] text-white px-4 py-2 rounded-lg hover:bg-[#1e6853]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
-        </form>
-      </div> */}
 
       {/* Summary Modal */}
       {showSummaryModal && summaryData && (

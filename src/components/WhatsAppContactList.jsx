@@ -1,9 +1,9 @@
-import React, { useEffect, useCallback, useState, memo } from 'react';
+import React, { useEffect, useCallback, useState, memo, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
-import { fetchContacts, syncContact, selectContactPriority, updateContactMembership, freshSyncContacts, addContact } from '../store/slices/contactSlice';
+import { fetchContacts, syncContact, selectContactPriority, updateContactMembership, freshSyncContacts, addContact, hideContact, updateContactDisplayName } from '../store/slices/contactSlice';
 import logger from '../utils/logger';
 import SyncProgressIndicator from './SyncProgressIndicator';
 import { SYNC_STATES } from '../utils/syncUtils';
@@ -80,7 +80,40 @@ const ShimmerContactList = () => (
 );
 
 const ContactItem = memo(({ contact, onClick, isSelected }) => {
+  const dispatch = useDispatch();
   const priority = useSelector(state => selectContactPriority(state, contact.id));
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedName, setEditedName] = useState(contact.display_name);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const editInputRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (isEditing && editInputRef.current && !editInputRef.current.contains(e.target)) {
+        setIsEditing(false);
+        setEditedName(contact.display_name);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isEditing, contact.display_name]);
+
+  const handleEdit = (e) => {
+    e.stopPropagation();
+    setIsEditing(true);
+  };
+
+  const handleDelete = (e) => {
+    e.stopPropagation();
+    dispatch(hideContact(contact.id));
+  };
+
+  const handleNameSubmit = (e) => {
+    if (e.key === 'Enter' && editedName.trim()) {
+      dispatch(updateContactDisplayName({ contactId: contact.id, displayName: editedName.trim() }));
+      setIsEditing(false);
+    }
+  };
   
   return (
     <div
@@ -88,8 +121,29 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
         isSelected ? 'bg-[#24283b]' : ''
       }`}
       onClick={onClick}
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
     >
       <PriorityBubble priority={priority} />
+      
+      {showTooltip && (
+        <div className="absolute right-2 top-2 flex gap-2 bg-[#1a1b26] p-1 rounded shadow-lg z-10">
+          <button
+            onClick={handleEdit}
+            className="text-gray-400 hover:text-white p-1"
+            title="Edit contact name"
+          >
+            ✏️
+          </button>
+          <button
+            onClick={handleDelete}
+            className="text-gray-400 hover:text-white p-1"
+            title="Hide contact"
+          >
+            🗑️
+          </button>
+        </div>
+      )}
       
       <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center flex-shrink-0">
         {contact.profile_photo_url ? (
@@ -106,16 +160,29 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
       </div>
       <div className="ml-3 flex-1 min-w-0">
         <div className="flex justify-between items-start">
-          <h3 className="text-white font-medium truncate">
-            {contact.display_name}
-          </h3>
-          {contact.last_message_at && (
+          {isEditing ? (
+            <input
+              ref={editInputRef}
+              type="text"
+              value={editedName}
+              onChange={(e) => setEditedName(e.target.value)}
+              onKeyDown={handleNameSubmit}
+              className="bg-[#1a1b26] text-white px-2 py-1 rounded w-full"
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <h3 className="text-white font-medium truncate">
+              {contact.display_name}
+            </h3>
+          )}
+          {contact.last_message_at && !isEditing && (
             <span className="text-xs text-gray-400 flex-shrink-0">
               {format(new Date(contact.last_message_at), 'HH:mm')}
             </span>
           )}
         </div>
-        {contact.last_message && (
+        {contact.last_message && !isEditing && (
           <p className="text-sm text-gray-400 truncate">
             {contact.last_message}
           </p>
@@ -414,17 +481,36 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     }
   }, [hasShownAcknowledgment, contacts]);
 
-  // Filter out bridge bot and status broadcast
-  const filteredContacts = contacts.filter(contact => {
-    const displayName = contact.display_name?.toLowerCase() || '';
-    // Specifically check for bridge bot and status broadcasts
-    const isBridgeBot = displayName === 'whatsapp bridge bot';
-    const isStatusBroadcast = displayName.includes('whatsapp status') || 
-                             displayName.includes('broadcast');
-    
-    // Keep regular WhatsApp contacts (including those with (WA) suffix)
-    return !isBridgeBot && !isStatusBroadcast;
-  });
+  // Filter out duplicates and bridge bot/status broadcasts
+  const filteredContacts = useMemo(() => {
+    const displayNameMap = new Map();
+    return contacts.filter(contact => {
+      const displayName = contact.display_name?.toLowerCase() || '';
+      
+      // Skip bridge bot and status broadcasts
+      const isBridgeBot = displayName === 'whatsapp bridge bot';
+      const isStatusBroadcast = displayName.includes('whatsapp status') || 
+                               displayName.includes('broadcast');
+      
+      if (isBridgeBot || isStatusBroadcast) return false;
+
+      // Handle duplicates - keep the most recently active one
+      if (displayNameMap.has(displayName)) {
+        const existing = displayNameMap.get(displayName);
+        const existingTime = new Date(existing.last_message_at || 0).getTime();
+        const currentTime = new Date(contact.last_message_at || 0).getTime();
+        
+        if (currentTime > existingTime) {
+          displayNameMap.set(displayName, contact);
+          return true;
+        }
+        return false;
+      }
+      
+      displayNameMap.set(displayName, contact);
+      return true;
+    });
+  }, [contacts]);
 
   return (
     <>
@@ -502,14 +588,6 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
               <p className="text-gray-500">
                 {syncProgress ? 'Syncing contacts...' : 'Application syncs new contacts with new messages 🔃'}
               </p>
-              {/* {!syncProgress && (
-                <button 
-                  onClick={handleRefresh}
-                  className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                >
-                  Refresh
-                </button>
-              )} */}
             </div>
           ) : (
             <div className="contact-list divide-y divide-gray-700">

@@ -188,6 +188,17 @@ const contactSlice = createSlice({
           displayName: newContact.display_name
         });
       }
+    },
+    hideContact: (state, action) => {
+      const contactId = action.payload;
+      state.items = state.items.filter(contact => contact.id !== contactId);
+    },
+    updateContactDisplayName: (state, action) => {
+      const { contactId, displayName } = action.payload;
+      const contact = state.items.find(c => c.id === contactId);
+      if (contact) {
+        contact.display_name = displayName;
+      }
     }
   },
   extraReducers: (builder) => {
@@ -290,7 +301,9 @@ export const {
   updateContactMembership,
   setPriority,
   cleanupPriorities,
-  addContact
+  addContact,
+  hideContact,
+  updateContactDisplayName
 } = contactSlice.actions;
 
 // Export reducer
