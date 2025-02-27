@@ -49,6 +49,7 @@ const ERROR_MESSAGES = {
 
 // Update sync states to match database constraints
 const SYNC_STATES = {
+  IDLE: 'idle',
   PENDING: 'pending',
   APPROVED: 'approved',
   REJECTED: 'rejected'
@@ -165,12 +166,46 @@ const CONNECTION_STATUS = {
 
 // Add new loading state constant
 const LOADING_STATES = {
+  IDLE: 'idle',
   INITIAL: 'initial',
   CONNECTING: 'connecting',
   FETCHING: 'fetching',
   COMPLETE: 'complete',
   ERROR: 'error'
 };
+
+const LoadingChatView = ({ details }) => (
+  <div className="flex flex-col h-full">
+    {/* Header Skeleton */}
+    <div className="flex items-center p-4 border-b border-gray-700 bg-dark-lighter">
+      <div className="w-10 h-10 rounded-full bg-gray-700 animate-pulse"></div>
+      <div className="ml-4 flex-1">
+        <div className="h-4 w-32 bg-gray-700 rounded animate-pulse"></div>
+        <div className="h-3 w-24 bg-gray-700 rounded mt-2 animate-pulse"></div>
+      </div>
+    </div>
+
+    {/* Messages Area Skeleton */}
+    <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+      <div className="flex justify-start">
+        <div className="w-2/3 h-16 bg-gray-700 rounded-lg animate-pulse"></div>
+      </div>
+      <div className="flex justify-end">
+        <div className="w-2/3 h-12 bg-gray-700 rounded-lg animate-pulse"></div>
+      </div>
+      <div className="flex justify-start">
+        <div className="w-1/2 h-14 bg-gray-700 rounded-lg animate-pulse"></div>
+      </div>
+    </div>
+
+    {/* Loading Indicator */}
+    <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark/50 backdrop-blur-sm">
+      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
+      <p className="text-gray-400 mt-4">Connecting to chat...</p>
+      <p className="text-sm text-gray-500 mt-2">{details}</p>
+    </div>
+  </div>
+);
 
 const ChatView = ({ selectedContact, onContactUpdate }) => {
   const dispatch = useDispatch();
@@ -211,9 +246,14 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const [socketReady, setSocketReady] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [summaryData, setSummaryData] = useState(null);
-  const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
-  const [avatarError, setAvatarError] = useState(false);
-  const [loadingState, setLoadingState] = useState(LOADING_STATES.INITIAL);
+  const [loadingState, setLoadingState] = useState(LOADING_STATES.IDLE);
+  const [syncState, setSyncState] = useState({
+    state: SYNC_STATES.IDLE,
+    progress: 0,
+    details: '',
+    processedMessages: 0,
+    totalMessages: 0
+  });
 
   // Refs
   const syncAbortController = useRef(null);
@@ -446,6 +486,27 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         });
     }
   }, [dispatch, selectedContact?.id, selectedContact?.membership]);
+
+  // Show loading immediately when contact changes
+  useEffect(() => {
+    if (selectedContact?.id) {
+      setLoadingState(LOADING_STATES.CONNECTING);
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.PENDING,
+        progress: 0,
+        details: 'Initializing chat...',
+        processedMessages: 0,
+        totalMessages: 0
+      }));
+    } else {
+      setLoadingState(LOADING_STATES.IDLE);
+      setSyncState(prev => ({
+        ...prev,
+        state: SYNC_STATES.IDLE
+      }));
+    }
+  }, [selectedContact?.id]);
 
   // Update socket event handlers
   useEffect(() => {
@@ -758,7 +819,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   };
 
   const renderAvatar = () => {
-    if (!selectedContact.avatar_url || avatarError) {
+    if (!selectedContact.avatar_url) {
       return (
         <span className="text-white text-lg">
           {(selectedContact.display_name || '?')[0].toUpperCase()}
@@ -776,7 +837,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         src={avatarUrl}
         alt={selectedContact.display_name || 'Contact'}
         className="w-full h-full rounded-full object-cover"
-        onError={() => setAvatarError(true)}
       />
     );
   };
@@ -790,145 +850,155 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   }
 
   return (
-    <div className="relative flex flex-col h-full bg-[#1a1b26]">
-      {/* Show sync progress indicator with loading state */}
-      <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
-      
-      {/* Chat Header - Fixed height */}
-      <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
-            {renderAvatar()}
-          </div>
-          <div>
-            <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
-            <div className="flex items-center space-x-2">
-              {renderConnectionStatus()}
-              <div className="relative inline-block text-left ml-2">
-                <select
-                  value={priority || selectedContact.metadata?.priority || 'medium'}
-                  onChange={(e) => handlePriorityChange(e.target.value)}
-                  className="bg-[#1e2132] text-sm rounded-md border border-gray-700 px-2 py-1 appearance-none cursor-pointer hover:bg-[#252a3f] focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
-                  style={{
-                    backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                    backgroundPosition: 'right 0.5rem center',
-                    backgroundRepeat: 'no-repeat',
-                    backgroundSize: '1.5em 1.5em',
-                    paddingRight: '2.5rem'
-                  }}
-                >
-                  <option value="low" className="text-gray-300 bg-[#1e2132]">Low Priority</option>
-                  <option value="medium" className="text-yellow-500 bg-[#1e2132]">Medium Priority</option>
-                  <option value="high" className="text-red-500 bg-[#1e2132]">High Priority</option>
-                </select>
+    <div className="flex flex-col h-full bg-dark relative">
+      {!selectedContact?.id ? (
+        <div className="flex flex-col items-center justify-center h-full text-gray-500">
+          <p>Select a contact to start chatting</p>
+        </div>
+      ) : loadingState === LOADING_STATES.CONNECTING || loadingState === LOADING_STATES.FETCHING ? (
+        <LoadingChatView details={syncState.details} />
+      ) : (
+        <div className="relative flex flex-col h-full bg-[#1a1b26]">
+          {/* Show sync progress indicator with loading state */}
+          <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
+          
+          {/* Chat Header - Fixed height */}
+          <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
+                {renderAvatar()}
+              </div>
+              <div>
+                <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
+                <div className="flex items-center space-x-2">
+                  {renderConnectionStatus()}
+                  <div className="relative inline-block text-left ml-2">
+                    <select
+                      value={priority || selectedContact.metadata?.priority || 'medium'}
+                      onChange={(e) => handlePriorityChange(e.target.value)}
+                      className="bg-[#1e2132] text-sm rounded-md border border-gray-700 px-2 py-1 appearance-none cursor-pointer hover:bg-[#252a3f] focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
+                      style={{
+                        backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                        backgroundPosition: 'right 0.5rem center',
+                        backgroundRepeat: 'no-repeat',
+                        backgroundSize: '1.5em 1.5em',
+                        paddingRight: '2.5rem'
+                      }}
+                    >
+                      <option value="low" className="text-gray-300 bg-[#1e2132]">Low Priority</option>
+                      <option value="medium" className="text-yellow-500 bg-[#1e2132]">Medium Priority</option>
+                      <option value="high" className="text-red-500 bg-[#1e2132]">High Priority</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
+            <div className="flex items-center space-x-4">
+              {connectionStatus !== 'connected' && messageQueue.length > 0 && (
+                <div className="text-sm text-yellow-500">
+                  {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
+                </div>
+              )}
+              <button
+                onClick={handleFetchNewMessages}
+                disabled={isNewMessagesFetching}
+                className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
+                title="Check for new messages"
+              >
+                <span className="text-xl">📩</span>
+                <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
+              </button>
+              <button  
+                onClick={handleSummaryClick}
+                disabled={messages.length === 0 || isSummarizing}
+                className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
+                title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
+              >
+                <FiFileText className="w-5 h-5" />
+                <p>Generate summary</p>
+              </button>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center space-x-4">
-          {connectionStatus !== 'connected' && messageQueue.length > 0 && (
-            <div className="text-sm text-yellow-500">
-              {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
+
+          {/* Messages Area - Scrollable */}
+          <div 
+            ref={messagesContainerRef}
+            className="flex-1 overflow-y-auto p-4 space-y-4"
+            onScroll={async (e) => {
+              const { scrollTop, scrollHeight, clientHeight } = e.target;
+              if (scrollTop === 0 && hasMoreMessages && !loading) {
+                const nextPage = currentPage + 1;
+                await dispatch(fetchMessages({
+                  contactId: selectedContact.id,
+                  page: nextPage,
+                  limit: PAGE_SIZE
+                }));
+              }
+            }}
+          >
+            {renderMessages()}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Summary Modal */}
+          {showSummaryModal && summaryData && (
+            <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+              <div className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-6">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xl font-medium text-white">Chat Summary</h3>
+                  <button
+                    onClick={() => setShowSummaryModal(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <FiX className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                {/* Main Points */}
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-white font-medium mb-2">Main Points</h4>
+                    <ul className="list-disc list-inside text-gray-300 space-y-1">
+                      {summaryData.summary.mainPoints.map((point, index) => (
+                        <li key={index}>{point}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Action Items */}
+                  {summaryData.summary.actionItems.length > 0 && (
+                    <div>
+                      <h4 className="text-white font-medium mb-2">Action Items</h4>
+                      <ul className="list-disc list-inside text-gray-300 space-y-1">
+                        {summaryData.summary.actionItems.map((item, index) => (
+                          <li key={index}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Key Decisions */}
+                  {summaryData.summary.keyDecisions.length > 0 && (
+                    <div>
+                      <h4 className="text-white font-medium mb-2">Key Decisions</h4>
+                      <ul className="list-disc list-inside text-gray-300 space-y-1">
+                        {summaryData.summary.keyDecisions.map((decision, index) => (
+                          <li key={index}>{decision}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Summary Info */}
+                  <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
+                    <p>Analyzed {summaryData.messageCount} messages</p>
+                    <p>From: {new Date(summaryData.timespan.start).toLocaleString()}</p>
+                    <p>To: {new Date(summaryData.timespan.end).toLocaleString()}</p>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
-          <button
-            onClick={handleFetchNewMessages}
-            disabled={isNewMessagesFetching}
-            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
-            title="Check for new messages"
-          >
-            <span className="text-xl">📩</span>
-            <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
-          </button>
-          <button  
-            onClick={handleSummaryClick}
-            disabled={messages.length === 0 || isSummarizing}
-            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
-            title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
-          >
-            <FiFileText className="w-5 h-5" />
-            <p>Generate summary</p>
-          </button>
-        </div>
-      </div>
-
-      {/* Messages Area - Scrollable */}
-      <div 
-        ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-4"
-        onScroll={async (e) => {
-          const { scrollTop, scrollHeight, clientHeight } = e.target;
-          if (scrollTop === 0 && hasMoreMessages && !loading) {
-            const nextPage = currentPage + 1;
-            await dispatch(fetchMessages({
-              contactId: selectedContact.id,
-              page: nextPage,
-              limit: PAGE_SIZE
-            }));
-          }
-        }}
-      >
-        {renderMessages()}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Summary Modal */}
-      {showSummaryModal && summaryData && (
-        <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-          <div className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-xl font-medium text-white">Chat Summary</h3>
-              <button
-                onClick={() => setShowSummaryModal(false)}
-                className="text-gray-400 hover:text-white"
-              >
-                <FiX className="w-5 h-5" />
-              </button>
-      </div>
-            
-            {/* Main Points */}
-            <div className="space-y-4">
-              <div>
-                <h4 className="text-white font-medium mb-2">Main Points</h4>
-                <ul className="list-disc list-inside text-gray-300 space-y-1">
-                  {summaryData.summary.mainPoints.map((point, index) => (
-                    <li key={index}>{point}</li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Action Items */}
-              {summaryData.summary.actionItems.length > 0 && (
-                <div>
-                  <h4 className="text-white font-medium mb-2">Action Items</h4>
-                  <ul className="list-disc list-inside text-gray-300 space-y-1">
-                    {summaryData.summary.actionItems.map((item, index) => (
-                      <li key={index}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Key Decisions */}
-              {summaryData.summary.keyDecisions.length > 0 && (
-                <div>
-                  <h4 className="text-white font-medium mb-2">Key Decisions</h4>
-                  <ul className="list-disc list-inside text-gray-300 space-y-1">
-                    {summaryData.summary.keyDecisions.map((decision, index) => (
-                      <li key={index}>{decision}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Summary Info */}
-              <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
-                <p>Analyzed {summaryData.messageCount} messages</p>
-                <p>From: {new Date(summaryData.timespan.start).toLocaleString()}</p>
-                <p>To: {new Date(summaryData.timespan.end).toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </div>
