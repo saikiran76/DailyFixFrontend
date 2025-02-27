@@ -899,7 +899,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
                   {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
                 </div>
               )}
-              <button
+              {/* <button
                 onClick={handleFetchNewMessages}
                 disabled={isNewMessagesFetching}
                 className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
@@ -907,7 +907,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               >
                 <span className="text-xl">📩</span>
                 <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
-              </button>
+              </button> */}
               <button  
                 onClick={handleSummaryClick}
                 disabled={messages.length === 0 || isSummarizing}
