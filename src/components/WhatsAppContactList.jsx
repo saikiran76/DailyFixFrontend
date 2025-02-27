@@ -519,14 +519,14 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         onClose={() => setShowAcknowledgment(false)} 
       />
       
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full w-[100%]">
         {/* Header with refresh button */}
         <div className="flex items-center p-4 border-b border-gray-700">
           {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
           <button
             onClick={handleRefresh}
             disabled={loading || isRefreshing}
-            className={`p-2 rounded-full ml-2 transition-all duration-200 text-center ${
+            className={`p-2 flex justify-between p-4 rounded-full ml-2 transition-all duration-200 text-center ${
               loading || isRefreshing 
                 ? 'bg-gray-700 cursor-not-allowed opacity-50'
                 : 'hover:bg-gray-700'
@@ -546,6 +546,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
               />
             </svg>
+            <p>Refresh contacts</p>
           </button>
         </div>
 
