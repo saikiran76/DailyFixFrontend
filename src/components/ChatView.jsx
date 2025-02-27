@@ -12,7 +12,6 @@ import { debounce } from 'lodash';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useSocket } from '../hooks/useSocket';
 import LoadingSpinner from './LoadingSpinner';
-import InviteAcceptanceModal from './InviteAcceptanceModal';
 import MessageItem from './MessageItem';
 import {
   fetchMessages,
@@ -178,7 +177,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const [pendingSyncs, setPendingSyncs] = useState(new Set());
   const [isInitialized, setIsInitialized] = useState(false);
   const [socketReady, setSocketReady] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [summaryData, setSummaryData] = useState(null);
   const [syncState, setSyncState] = useState(INITIAL_SYNC_STATE);
@@ -197,7 +195,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const syncTimeoutRef = useRef(null);
 
   // Constants
-  const PAGE_SIZE = 30;
+  const PAGE_SIZE = 50;
   const MAX_RETRIES = 3;
   const RETRY_COOLDOWN = 5000;
 
@@ -281,141 +279,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   };
 
-  // Add invite handling functions
-  const handleAcceptInvite = useCallback(async () => {
-    if (!selectedContact?.id) return;
-  
-    try {
-      const response = await api.post(
-        `/api/whatsapp-entities/contacts/${selectedContact.id}/accept`
-      );
-  
-      // Check the server response
-      if (response.data?.success) {
-        // success = true
-        if (response.data.joinedBefore) {
-          // Case B: success but joinedBefore = true
-          logger.warn('[ChatView] Contact already joined the room');
-          toast.success('Already joined this room');
-      } else {
-          // Case A: success, joinedBefore = false
-          toast.success('Invite accepted successfully');
-        }
-  
-        // In both success cases (A or B), we want to re-fetch messages
-        setShowInviteModal(false);
-  
-        // Update membership in Redux if needed
-        // (assuming `updatedContact` is returned or we have membership data)
-        const updatedContact = response.data.contact;
-        dispatch(updateContactMembership({
-          contactId: selectedContact.id,
-          updatedContact
-        }));
-        onContactUpdate(updatedContact);
-  
-        // Now fetch the messages
-        dispatch(clearMessages());
-        dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
-      } else {
-        // success = false
-        if (response.data?.joinedBefore) {
-          // This is an unusual scenario, but if it occurs:
-          logger.warn('[ChatView] Contact was joined before but success=false');
-          toast.success('Already joined this room');
-          
-          // Might still want to fetch messages here
-          setShowInviteModal(false);
-          dispatch(clearMessages());
-          dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
-    } else {
-          // Actually a failure
-          const errorMsg = response.data?.message || 'Failed to accept invite';
-          logger.error('[ChatView] Error accepting invite:', { error: errorMsg });
-          toast.error(errorMsg);
-        }
-      }
-    } catch (error) {
-      logger.error('[ChatView] Error accepting invite:', {
-        error,
-        contactId: selectedContact.id
-      });
-      toast.error(error.message || 'Failed to accept invite. Please try again.');
-    }
-  }, [selectedContact, dispatch, onContactUpdate]);
-  
-
-  // const handleRejectInvite = useCallback(async () => {
-  //   if (!selectedContact?.id) return;
-
-  //   try {
-  //     logger.info('[ChatView] Rejecting invite for contact:', {
-  //       contactId: selectedContact.id,
-  //       currentMembership: selectedContact.metadata?.membership
-  //     });
-
-  //     // Make API call to reject invite
-  //     const response = await api.post(`/api/contacts/${selectedContact.id}/reject`);
-      
-  //     if (!response.data?.success) {
-  //       throw new Error('Failed to reject invite');
-  //     }
-
-  //     // Update contact in Redux with new membership
-  //     dispatch(updateContactMembership({
-  //       contactId: selectedContact.id,
-  //       updatedContact: {
-  //         ...selectedContact,
-  //         metadata: {
-  //           ...selectedContact.metadata,
-  //           membership: 'rejected'
-  //         }
-  //       }
-  //     }));
-
-  //     // Close modal
-  //     setShowInviteModal(false);
-
-  //     // Show success message
-  //     toast.success('Invite rejected');
-
-  //     // Update parent component
-  //     onContactUpdate({
-  //       ...selectedContact,
-  //       metadata: {
-  //         ...selectedContact.metadata,
-  //         membership: 'rejected'
-  //       }
-  //     });
-
-  //   } catch (error) {
-  //     logger.error('[ChatView] Error rejecting invite:', error);
-  //     toast.error('Failed to reject invite. Please try again.');
-  //   }
-  // }, [selectedContact, dispatch, onContactUpdate]);
-
-  // Update invite modal effect to check original membership
-  useEffect(() => {
-    if (!selectedContact) return;
-  
-    // Check both direct membership and metadata membership
-    const membership = selectedContact.membership || 
-                      selectedContact.metadata?.membership;
-  
-    logger.info('[ChatView] Checking contact membership:', {
-      contactId: selectedContact.id,
-      membership
-    });
-  
-    if (membership === 'invite') {
-      logger.info('[ChatView] Showing invite modal');
-      setShowInviteModal(true);
-    } else {
-      logger.info('[ChatView] Hiding invite modal');
-      setShowInviteModal(false);
-    }
-  }, [selectedContact?.id, selectedContact?.membership, selectedContact?.metadata?.membership]);
-
   // Effects
   useEffect(() => {
     return () => {
@@ -426,54 +289,51 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   useEffect(() => {
     if (!selectedContact?.id) return;
 
-    // Only clear and fetch messages if membership is 'join'
+    // Enhanced membership handling
+    logger.info('[ChatView] Contact selected:', {
+      contactId: selectedContact.id,
+      membership: selectedContact.membership
+    });
+
+    // Only proceed with room listener and message fetching if membership is 'join'
     if (selectedContact?.membership === 'join') {
       logger.info('[ChatView] Setting up room listener for contact:', {
         contactId: selectedContact.id,
         membership: selectedContact.membership
       });
 
-      // Setup room listener - LETS PAUSE THIS LISTENING FOR A WHILE - IN DEV-LVL2.3
+      // Setup room listener
       api.post(`/api/whatsapp-entities/contacts/${selectedContact.id}/listen`)
         .then(response => {
           logger.info('[ChatView] Room listener setup successful:', {
             contactId: selectedContact.id,
             response: response.data
           });
+
+          // Clear existing messages when contact changes
+          dispatch(clearMessages());
+          
+          // Fetch initial messages
+          dispatch(fetchMessages({ 
+            contactId: selectedContact.id, 
+            page: 0, 
+            limit: PAGE_SIZE 
+          }));
         })
         .catch(error => {
           logger.error('[ChatView] Failed to setup room listener:', {
             contactId: selectedContact.id,
             error: error.message
           });
+          toast.error('Failed to connect to chat room');
         });
-
-      // Clear existing messages when contact changes
-      dispatch(clearMessages());
-      
-      // Fetch initial messages
-      dispatch(fetchMessages({ contactId: selectedContact.id, page: 0, limit: PAGE_SIZE }));
+    } else {
+      logger.info('[ChatView] Contact not in joined state:', {
+        contactId: selectedContact.id,
+        membership: selectedContact.membership
+      });
     }
   }, [dispatch, selectedContact?.id, selectedContact?.membership]);
-
-  // Add membership change effect
-  useEffect(() => {
-    if (selectedContact?.membership === 'join') {
-      logger.info('[ChatView] Contact membership changed to join, fetching messages:', {
-        contactId: selectedContact.id
-      });
-      
-      // Clear existing messages
-      dispatch(clearMessages());
-      
-      // Fetch new messages
-      dispatch(fetchMessages({ 
-        contactId: selectedContact.id, 
-        page: 0, 
-        limit: PAGE_SIZE 
-      }));
-    }
-  }, [selectedContact?.membership, dispatch, selectedContact?.id]);
 
   // Update socket event handlers
   useEffect(() => {
@@ -918,15 +778,6 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           </button>
         </form>
       </div> */}
-
-      {/* Render InviteAcceptanceModal */}
-      {showInviteModal && selectedContact && (
-        <InviteAcceptanceModal
-          contact={selectedContact}
-          onAccept={handleAcceptInvite}
-          onClose={() => setShowInviteModal(false)}
-        />
-      )}
 
       {/* Summary Modal */}
       {showSummaryModal && summaryData && (
