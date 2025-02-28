@@ -109,13 +109,13 @@ const WelcomeStep = ({ onNext }) => {
       <img src={DailyFix} className='h-[440px] w-[400px] rounded mx-auto mb-3' alt='logo-entry'/>
       <p className="text-xl mb-8">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
       {showGetStarted && (
-        <button
+      <button
           onClick={() => {
             setTransProg(true)
             onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)
           }
         }
-          className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
+        className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition-colors"
         >
           {!transProg ? 'Get Started' : 'Getting Started.. Hold on!'}
         </button>
@@ -240,7 +240,7 @@ const GuideModal = ({ isOpen, onClose }) => {
                 className="px-4 py-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Next
-              </button>
+      </button>
             </div>
           </div>
         </div>
@@ -665,7 +665,7 @@ const PlatformSelectionStep = ({ onNext }) => {
 const WhatsAppSetupStep = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { loading, error, matrixConnected, whatsappConnected, currentStep } = useSelector(selectOnboardingState);
+  const { loading, error, matrixConnected, whatsappConnected, currentStep, isReloginFlow } = useSelector(selectOnboardingState);
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
@@ -678,8 +678,8 @@ const WhatsAppSetupStep = () => {
         
         if (!mounted) return;
 
-        // Only redirect if explicitly not connected
-        if (onboardingStatus.matrixConnected === false) {
+        // Only redirect if explicitly not connected and not in relogin flow
+        if (onboardingStatus.matrixConnected === false && !isReloginFlow) {
           dispatch(setOnboardingError('Matrix connection is required'));
             await dispatch(updateOnboardingStep({ step: 'matrix' })).unwrap();
           navigate(ONBOARDING_ROUTES.MATRIX, { replace: true });
@@ -701,29 +701,21 @@ const WhatsAppSetupStep = () => {
     return () => {
       mounted = false;
     };
-  }, [dispatch, navigate]);
+  }, [dispatch, navigate, isReloginFlow]);
 
   const handleComplete = async () => {
     try {
-      // Use current Redux state instead of fetching
-      if (!matrixConnected || !whatsappConnected) {
-        logger.error('[WhatsAppSetupStep] Cannot complete onboarding - services not connected:', { matrixConnected, whatsappConnected });
-        dispatch(setOnboardingError('Both Matrix and WhatsApp must be connected to complete setup'));
-        return;
-      }
-
-      // Update onboarding step to complete
       await dispatch(updateOnboardingStep({ 
         step: 'complete',
         data: { 
           whatsappConnected: true,
           matrixConnected: true,
           isComplete: true,
+          isReloginFlow: false,
           connectedPlatforms: ['matrix', 'whatsapp']
         }
       })).unwrap();
 
-      // Navigate to completion route
       navigate(ONBOARDING_ROUTES.COMPLETE, { replace: true });
     } catch (error) {
       logger.error('[WhatsAppSetupStep] Error completing setup:', error);
@@ -731,10 +723,7 @@ const WhatsAppSetupStep = () => {
     }
   };
 
-  console.log('[WhatsAppSetupStep] Component state:', { isChecking, loading, error, whatsappConnected });
-
   if (isChecking) {
-    console.log('[WhatsAppSetupStep] Showing loading state');
     return (
       <div className="max-w-lg mx-auto text-center p-8">
         <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
@@ -743,31 +732,16 @@ const WhatsAppSetupStep = () => {
     );
   }
 
-  if (error) {
-    console.log('[WhatsAppSetupStep] Showing error state:', error);
-    return (
-      <div className="max-w-lg mx-auto text-center p-8">
-        <div className="text-red-500 mb-4">⚠️</div>
-        <p className="text-red-400">{error}</p>
-        <button 
-          onClick={() => {
-            setIsChecking(true);
-            dispatch(fetchOnboardingStatus());
-          }}
-          className="mt-4 px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark transition-colors"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  console.log('[WhatsAppSetupStep] Rendering main content. WhatsApp connected:', whatsappConnected);
-
   return (
     <div className="max-w-lg mx-auto p-8">
-      <h2 className="text-2xl font-bold mb-4">{STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].title}</h2>
-      <p className="text-gray-300 mb-8">{STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].description}</p>
+      <h2 className="text-2xl font-bold mb-4">
+        {isReloginFlow ? 'Reconnect WhatsApp' : STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].title}
+      </h2>
+      <p className="text-gray-300 mb-8">
+        {isReloginFlow 
+          ? 'Scan the QR code to reconnect your WhatsApp account'
+          : STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].description}
+      </p>
       
       {whatsappConnected ? (
         <div className="text-center">
@@ -781,10 +755,7 @@ const WhatsAppSetupStep = () => {
           </button>
         </div>
       ) : (
-        <>
-          {console.log('[WhatsAppSetupStep] Rendering WhatsAppBridgeSetup')}
         <WhatsAppBridgeSetup onComplete={handleComplete} />
-        </>
       )}
     </div>
   );

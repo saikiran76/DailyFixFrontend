@@ -73,11 +73,11 @@ const INITIAL_SYNC_STATE = {
 const SyncProgressIndicator = ({ syncState, loadingState }) => {
   const getStatusColor = () => {
     if (syncState.state === SYNC_STATES.REJECTED) {
-      return 'bg-red-500';
+        return 'bg-red-500';
     } else if (syncState.state === SYNC_STATES.APPROVED) {
       return 'bg-green-500';
     } else {
-      return 'bg-yellow-500';
+        return 'bg-yellow-500';
     }
   };
 
@@ -369,7 +369,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       const validLastEventId = typeof lastEventId === 'string' ? lastEventId : String(lastEventId);
       
       const result = await dispatch(fetchNewMessages({ 
-        contactId: selectedContact.id, 
+          contactId: selectedContact.id,
         lastEventId: validLastEventId 
       })).unwrap();
 
@@ -383,7 +383,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       if (result?.messages?.length > 0) {
         scrollToBottom();
         toast.success(`${result.messages.length} new message(s) received`);
-      } else {
+    } else {
         toast.info('No new messages');
       }
     } catch (error) {
@@ -445,13 +445,13 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             totalMessages: 0
           }));
           
-          dispatch(clearMessages());
-          
+      dispatch(clearMessages());
+      
           // Fetch initial messages
-          dispatch(fetchMessages({ 
-            contactId: selectedContact.id, 
-            page: 0, 
-            limit: PAGE_SIZE 
+      dispatch(fetchMessages({ 
+        contactId: selectedContact.id, 
+        page: 0, 
+        limit: PAGE_SIZE 
           }))
           .unwrap()
           .then((result) => {
@@ -606,14 +606,14 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               message: normalized || payload.message 
             }
           });
-          scrollToBottom();
+      scrollToBottom();
         } else {
           logger.info('[ChatView] Skipping duplicate message:', {
             messageId,
             timestamp: payload.message.timestamp
           });
         }
-      }
+    }
     };
 
     const handleMessageUpdate = (updatedMessage) => {
@@ -710,13 +710,13 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         totalMessages: messages.length
       }));
     } else if (loadingState === LOADING_STATES.ERROR) {
-      setSyncState(prev => ({
-        ...prev,
+        setSyncState(prev => ({
+          ...prev,
         state: SYNC_STATES.REJECTED,
         details: error || 'Failed to load messages',
         errors: [...prev.errors, { message: error || 'Failed to load messages', timestamp: Date.now() }]
-      }));
-    }
+        }));
+      }
   }, [loadingState, messages.length, error]);
 
   // Add effect to initialize priority when contact changes
@@ -784,13 +784,13 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       return <div className="text-gray-400 text-center">No messages yet</div>;
     }
 
-    return messages.map((message) => (
-      <MessageItem 
+      return messages.map((message) => (
+        <MessageItem 
         key={`${message.id}_${message.message_id}_${message.timestamp}`}
-        message={message}
-        currentUser={currentUser}
-      />
-    ));
+          message={message}
+          currentUser={currentUser}
+        />
+      ));
   }, [loadingState, messages, error, currentUser]);
 
   const handlePriorityChange = (priority) => {
@@ -862,43 +862,43 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           {/* Show sync progress indicator with loading state */}
           <SyncProgressIndicator syncState={syncState} loadingState={loadingState} />
           
-          {/* Chat Header - Fixed height */}
-          <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
+      {/* Chat Header - Fixed height */}
+      <div className="px-4 py-3 bg-[#24283b] flex items-center justify-between border-b border-gray-700 flex-none">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 rounded-full bg-[#1e6853] flex items-center justify-center">
                 {renderAvatar()}
-              </div>
-              <div>
-                <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
-                <div className="flex items-center space-x-2">
-                  {renderConnectionStatus()}
-                  <div className="relative inline-block text-left ml-2">
-                    <select
-                      value={priority || selectedContact.metadata?.priority || 'medium'}
-                      onChange={(e) => handlePriorityChange(e.target.value)}
-                      className="bg-[#1e2132] text-sm rounded-md border border-gray-700 px-2 py-1 appearance-none cursor-pointer hover:bg-[#252a3f] focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
-                      style={{
-                        backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                        backgroundPosition: 'right 0.5rem center',
-                        backgroundRepeat: 'no-repeat',
-                        backgroundSize: '1.5em 1.5em',
-                        paddingRight: '2.5rem'
-                      }}
-                    >
-                      <option value="low" className="text-gray-300 bg-[#1e2132]">Low Priority</option>
-                      <option value="medium" className="text-yellow-500 bg-[#1e2132]">Medium Priority</option>
-                      <option value="high" className="text-red-500 bg-[#1e2132]">High Priority</option>
-                    </select>
-                  </div>
-                </div>
+          </div>
+          <div>
+            <h2 className="text-white font-medium">{selectedContact.display_name || 'Unknown Contact'}</h2>
+            <div className="flex items-center space-x-2">
+              {renderConnectionStatus()}
+              <div className="relative inline-block text-left ml-2">
+                <select
+                  value={priority || selectedContact.metadata?.priority || 'medium'}
+                  onChange={(e) => handlePriorityChange(e.target.value)}
+                  className="bg-[#1e2132] text-sm rounded-md border border-gray-700 px-2 py-1 appearance-none cursor-pointer hover:bg-[#252a3f] focus:outline-none focus:ring-1 focus:ring-[#1e6853]"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                    backgroundPosition: 'right 0.5rem center',
+                    backgroundRepeat: 'no-repeat',
+                    backgroundSize: '1.5em 1.5em',
+                    paddingRight: '2.5rem'
+                  }}
+                >
+                  <option value="low" className="text-gray-300 bg-[#1e2132]">Low Priority</option>
+                  <option value="medium" className="text-yellow-500 bg-[#1e2132]">Medium Priority</option>
+                  <option value="high" className="text-red-500 bg-[#1e2132]">High Priority</option>
+                </select>
               </div>
             </div>
-            <div className="flex items-center space-x-4">
-              {connectionStatus !== 'connected' && messageQueue.length > 0 && (
-                <div className="text-sm text-yellow-500">
-                  {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
-                </div>
-              )}
+          </div>
+        </div>
+        <div className="flex items-center space-x-4">
+          {connectionStatus !== 'connected' && messageQueue.length > 0 && (
+            <div className="text-sm text-yellow-500">
+              {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
+            </div>
+          )}
               {/* <button
                 onClick={handleFetchNewMessages}
                 disabled={isNewMessagesFetching}
@@ -908,95 +908,95 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
                 <span className="text-xl">📩</span>
                 <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
               </button> */}
-              <button  
-                onClick={handleSummaryClick}
-                disabled={messages.length === 0 || isSummarizing}
+          <button 
+            onClick={handleSummaryClick}
+            disabled={messages.length === 0 || isSummarizing}
                 className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
-                title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
-              >
-                <FiFileText className="w-5 h-5" />
+            title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
+          >
+            <FiFileText className="w-5 h-5" />
                 <p>Generate summary</p>
+          </button>
+        </div>
+      </div>
+
+      {/* Messages Area - Scrollable */}
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+        onScroll={async (e) => {
+          const { scrollTop, scrollHeight, clientHeight } = e.target;
+          if (scrollTop === 0 && hasMoreMessages && !loading) {
+            const nextPage = currentPage + 1;
+            await dispatch(fetchMessages({
+              contactId: selectedContact.id,
+              page: nextPage,
+              limit: PAGE_SIZE
+            }));
+          }
+        }}
+      >
+        {renderMessages()}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Summary Modal */}
+      {showSummaryModal && summaryData && (
+        <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+          <div className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-medium text-white">Chat Summary</h3>
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <FiX className="w-5 h-5" />
               </button>
+      </div>
+            
+            {/* Main Points */}
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-white font-medium mb-2">Main Points</h4>
+                <ul className="list-disc list-inside text-gray-300 space-y-1">
+                  {summaryData.summary.mainPoints.map((point, index) => (
+                    <li key={index}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Action Items */}
+              {summaryData.summary.actionItems.length > 0 && (
+                <div>
+                  <h4 className="text-white font-medium mb-2">Action Items</h4>
+                  <ul className="list-disc list-inside text-gray-300 space-y-1">
+                    {summaryData.summary.actionItems.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Key Decisions */}
+              {summaryData.summary.keyDecisions.length > 0 && (
+                <div>
+                  <h4 className="text-white font-medium mb-2">Key Decisions</h4>
+                  <ul className="list-disc list-inside text-gray-300 space-y-1">
+                    {summaryData.summary.keyDecisions.map((decision, index) => (
+                      <li key={index}>{decision}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Summary Info */}
+              <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
+                <p>Analyzed {summaryData.messageCount} messages</p>
+                <p>From: {new Date(summaryData.timespan.start).toLocaleString()}</p>
+                <p>To: {new Date(summaryData.timespan.end).toLocaleString()}</p>
+              </div>
             </div>
           </div>
-
-          {/* Messages Area - Scrollable */}
-          <div 
-            ref={messagesContainerRef}
-            className="flex-1 overflow-y-auto p-4 space-y-4"
-            onScroll={async (e) => {
-              const { scrollTop, scrollHeight, clientHeight } = e.target;
-              if (scrollTop === 0 && hasMoreMessages && !loading) {
-                const nextPage = currentPage + 1;
-                await dispatch(fetchMessages({
-                  contactId: selectedContact.id,
-                  page: nextPage,
-                  limit: PAGE_SIZE
-                }));
-              }
-            }}
-          >
-            {renderMessages()}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Summary Modal */}
-          {showSummaryModal && summaryData && (
-            <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-              <div className="bg-[#24283b] rounded-lg p-6 max-w-2xl w-full mx-4 space-y-6">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-xl font-medium text-white">Chat Summary</h3>
-                  <button
-                    onClick={() => setShowSummaryModal(false)}
-                    className="text-gray-400 hover:text-white"
-                  >
-                    <FiX className="w-5 h-5" />
-                  </button>
-                </div>
-                
-                {/* Main Points */}
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="text-white font-medium mb-2">Main Points</h4>
-                    <ul className="list-disc list-inside text-gray-300 space-y-1">
-                      {summaryData.summary.mainPoints.map((point, index) => (
-                        <li key={index}>{point}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  {/* Action Items */}
-                  {summaryData.summary.actionItems.length > 0 && (
-                    <div>
-                      <h4 className="text-white font-medium mb-2">Action Items</h4>
-                      <ul className="list-disc list-inside text-gray-300 space-y-1">
-                        {summaryData.summary.actionItems.map((item, index) => (
-                          <li key={index}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Key Decisions */}
-                  {summaryData.summary.keyDecisions.length > 0 && (
-                    <div>
-                      <h4 className="text-white font-medium mb-2">Key Decisions</h4>
-                      <ul className="list-disc list-inside text-gray-300 space-y-1">
-                        {summaryData.summary.keyDecisions.map((decision, index) => (
-                          <li key={index}>{decision}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Summary Info */}
-                  <div className="text-sm text-gray-400 pt-4 border-t border-gray-700">
-                    <p>Analyzed {summaryData.messageCount} messages</p>
-                    <p>From: {new Date(summaryData.timespan.start).toLocaleString()}</p>
-                    <p>To: {new Date(summaryData.timespan.end).toLocaleString()}</p>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </div>

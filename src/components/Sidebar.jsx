@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiMessageSquare, FiCompass, FiSettings, FiLogOut, FiX } from 'react-icons/fi';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
+import { initiateWhatsAppRelogin } from '../store/slices/onboardingSlice';
+import { toast } from 'react-hot-toast';
+import ReloginConfirmationModal from './ReloginConfirmationModal';
 import summaryImage from '../images/summary.png'
 import dropImage from '../images/Drop.png'
 import priorityImage from '../images/priority.png'
@@ -89,7 +93,19 @@ const TutorialModal = ({ isOpen, onClose }) => {
 const Sidebar = ({ accounts, selectedPlatform, onPlatformSelect }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const dispatch = useDispatch();
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showReloginModal, setShowReloginModal] = useState(false);
+
+  const handleReloginConfirm = async () => {  
+    try {  
+      // Wait for 7 seconds before closing the modal  
+      await new Promise(resolve => setTimeout(resolve, 7000));  
+      setShowReloginModal(false);  
+    } catch (error) {  
+      toast.error('Failed to initiate reconnection');  
+    }  
+  };  
 
   const handlePlatformClick = (platform) => {
     onPlatformSelect(platform);
@@ -145,7 +161,13 @@ const Sidebar = ({ accounts, selectedPlatform, onPlatformSelect }) => {
         ))}
       </nav>
       <div className="p-4 border-t border-dark-lighter space-y-2">
-        <button
+          <button
+            onClick={() => setShowReloginModal(true)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-yellow-500 hover:bg-dark-lighter rounded-lg"
+          >
+            <span>Reconnect WhatsApp</span>
+          </button>        
+        {/* <button
           onClick={() => {
             // TODO: Implement logout
             alert("Logout not implemented");
@@ -153,12 +175,18 @@ const Sidebar = ({ accounts, selectedPlatform, onPlatformSelect }) => {
           className="w-full flex items-center gap-3 px-4 py-3 text-error hover:bg-dark-lighter rounded-lg"
         >
           <span>Logout</span>
-        </button>
+        </button> */}
       </div>
 
       <TutorialModal 
         isOpen={showTutorial} 
         onClose={() => setShowTutorial(false)} 
+      />
+
+      <ReloginConfirmationModal 
+        isOpen={showReloginModal}
+        onClose={() => setShowReloginModal(false)}
+        onConfirm={handleReloginConfirm}
       />
     </div>
   );
