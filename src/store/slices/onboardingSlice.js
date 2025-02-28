@@ -60,7 +60,8 @@ const initialState = {
     bridgeRoomId: null,
     phoneNumber: null,
     realTimeSetup: false
-  }
+  },
+  isReloginFlow: false,
 };
 
 // Async thunks
@@ -92,6 +93,24 @@ export const updateOnboardingStep = createAsyncThunk(
 );
 
 export const setWhatsappPhoneNumber = createAction('onboarding/setWhatsappPhoneNumber');
+
+export const initiateWhatsAppRelogin = createAsyncThunk(
+  'onboarding/initiateWhatsAppRelogin',
+  async (_, { dispatch }) => {
+    try {
+      await dispatch(updateOnboardingStep({ 
+        step: ONBOARDING_STEPS.WHATSAPP,
+        data: { 
+          isReloginFlow: true,
+          whatsappConnected: false 
+        }
+      }));
+      return true;
+    } catch (error) {
+      throw error;
+    }
+  }
+);
 
 const onboardingSlice = createSlice({
   name: 'onboarding',
@@ -151,6 +170,9 @@ const onboardingSlice = createSlice({
         ...initialState.whatsappSetup,
         setupState: 'initial'
       };
+    },
+    setReloginFlow: (state, action) => {
+      state.isReloginFlow = action.payload;
     }
   },
   extraReducers: (builder) => {
@@ -214,7 +236,8 @@ export const {
   setWhatsappTimeLeft,
   setWhatsappError,
   setBridgeRoomId,
-  resetWhatsappSetup
+  resetWhatsappSetup,
+  setReloginFlow
 } = onboardingSlice.actions;
 
 // Selectors
