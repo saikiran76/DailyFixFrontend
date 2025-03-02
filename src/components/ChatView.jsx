@@ -920,7 +920,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
             disabled={isRefreshing}
             className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
           >
-            <span className="text-xl">��</span>
+            <span className="text-xl">📩</span>
             <p>{isRefreshing ? 'Refreshing...' : 'Refresh'}</p>
           </button>
           <button 
