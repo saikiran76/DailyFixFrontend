@@ -4,7 +4,8 @@ import { format } from 'date-fns';
 import logger from '../utils/logger';
 
 const MessageItem = ({ message, currentUser }) => {
-  const isOwnMessage = message.sender_id === currentUser?.id;
+  // Check if sender is the current user (Matrix user)
+  const isMatrixUser = message.sender_id?.includes('matrix') || message.sender_id === currentUser?.id;
   const messageTime = message.timestamp ? format(new Date(message.timestamp), 'HH:mm') : '';
   
   // Ensure we have a valid message ID
@@ -37,19 +38,19 @@ const MessageItem = ({ message, currentUser }) => {
   };
 
   return (
-    <div className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex ${isMatrixUser ? 'justify-end' : 'justify-start'} mb-4`}>
       <div
         className={`max-w-[70%] rounded-lg px-4 py-2 ${
-          isOwnMessage 
-            ? 'bg-[#1e6853] text-white' 
-            : 'bg-[#24283b] text-gray-200'
+          isMatrixUser 
+            ? 'bg-[#1e6853] text-white rounded-tr-none' // Dark green for user's messages
+            : 'bg-[#24283b] text-gray-200 rounded-tl-none' // Gray for contact's messages
         }`}
       >
-        {!isOwnMessage && (
-          <div className="text-xs text-gray-400 mb-1">{message.sender_name}</div>
-        )}
+        <div className="text-xs text-gray-400 mb-1">
+          {isMatrixUser ? 'You' : message.sender_name || 'Contact'}
+        </div>
         <div className="break-words">{getMessageContent(message.content)}</div>
-        <div className={`text-xs mt-1 ${isOwnMessage ? 'text-gray-300' : 'text-gray-400'}`}>
+        <div className={`text-xs mt-1 ${isMatrixUser ? 'text-gray-300' : 'text-gray-400'}`}>
           {messageTime}
         </div>
       </div>
@@ -62,7 +63,8 @@ MessageItem.propTypes = {
     id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
     message_id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
     content: PropTypes.oneOfType([PropTypes.string, PropTypes.object]).isRequired,
-    sender: PropTypes.string,
+    sender_id: PropTypes.string,
+    sender_name: PropTypes.string,
     timestamp: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
     status: PropTypes.string
   }).isRequired,

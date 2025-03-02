@@ -183,7 +183,7 @@ const ReloginConfirmationModal = ({ isOpen, onClose, onConfirm }) => {
         {status === 'connecting' && (
           <div className="text-center py-4">
             <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto"></div>
-            <p className="mt-4 text-gray-300">Getting ready to reconnect... It might take a few seconds, hang tight!</p>
+            <p className="mt-4 text-gray-300">Getting ready to reconnect... It might take a few minutes so dont close the window and, hang tight!</p>
           </div>
         )}
 

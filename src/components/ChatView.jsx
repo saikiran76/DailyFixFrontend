@@ -31,7 +31,9 @@ import {
   fetchNewMessages,
   selectNewMessagesFetching,
   selectLastKnownMessageId,
-  selectNewMessagesError
+  selectNewMessagesError,
+  refreshMessages,
+  selectRefreshing
 } from '../store/slices/messageSlice';
 import { updateContactMembership, updateContactPriority } from '../store/slices/contactSlice';
 
@@ -212,6 +214,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   const navigate = useNavigate();
   const currentUser = useSelector(state => state.auth.session?.user);
   const { socket, isConnected } = useSocketConnection('whatsapp');
+  const isRefreshing = useSelector(selectRefreshing);
 
   // Redux message selectors
   const messagesState = useSelector(state => state.messages);
@@ -389,6 +392,17 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     } catch (error) {
       logger.error('[ChatView] Error fetching new messages:', error);
       toast.error(error.message || 'Failed to fetch new messages');
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (!selectedContact?.id || isRefreshing) return;
+    
+    try {
+      await dispatch(refreshMessages({ contactId: selectedContact.id })).unwrap();
+      toast.success('Messages refreshed successfully');
+    } catch (error) {
+      toast.error('Unable to refresh messages');
     }
   };
 
@@ -899,23 +913,22 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               {messageQueue.length} message{messageQueue.length > 1 ? 's' : ''} queued
             </div>
           )}
-              {/* <button
-                onClick={handleFetchNewMessages}
-                disabled={isNewMessagesFetching}
-                className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
-                title="Check for new messages"
-              >
-                <span className="text-xl">📩</span>
-                <p>{isNewMessagesFetching ? 'Checking...' : 'New Messages'}</p>
-              </button> */}
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
+          >
+            <span className="text-xl">📩</span>
+            <p>{isRefreshing ? 'Refreshing...' : 'Refresh'}</p>
+          </button>
           <button 
             onClick={handleSummaryClick}
             disabled={messages.length === 0 || isSummarizing}
-                className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
+            className="p-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex gap-3 items-center justify-between"
             title={messages.length === 0 ? 'No messages to summarize' : 'Generate conversation summary'}
           >
             <FiFileText className="w-5 h-5" />
-                <p>Generate summary</p>
+            <p>Generate summary</p>
           </button>
         </div>
       </div>

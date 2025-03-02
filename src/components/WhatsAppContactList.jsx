@@ -206,6 +206,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [syncProgress, setSyncProgress] = useState(null);
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Add a function to check if refresh is allowed
   // const isRefreshAllowed = () => {
@@ -512,6 +513,15 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     });
   }, [contacts]);
 
+  // Add memoized filtered contacts
+  const searchedContacts = useMemo(() => {
+    if (!searchQuery.trim()) return filteredContacts;
+    
+    return filteredContacts.filter(contact => 
+      contact.display_name?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [filteredContacts, searchQuery]);
+
   return (
     <>
       <AcknowledgmentModal 
@@ -520,55 +530,57 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       />
       
       <div className="flex flex-col h-full w-[100%]">
-        {/* Header with refresh button */}
-        <div className="flex items-center p-4 border-b border-gray-700">
-          {/* <h2 className="text-lg font-medium text-white">Contacts</h2> */}
-          <button
-            onClick={handleRefresh}
-            disabled={loading || isRefreshing}
-            className={`p-2 flex justify-between p-4 rounded-full ml-2 transition-all duration-200 text-center ${
-              loading || isRefreshing 
-                ? 'bg-gray-700 cursor-not-allowed opacity-50'
-                : 'hover:bg-gray-700'
-            }`}
-            title='Refresh contacts'
-          >
-            <svg
-              className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+        {/* Header with refresh button and search */}
+        <div className="flex flex-col p-4 border-b border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={handleRefresh}
+              disabled={loading || isRefreshing}
+              className={`p-2 flex justify-between rounded-full transition-all duration-200 text-center ${
+                loading || isRefreshing 
+                  ? 'bg-gray-700 cursor-not-allowed opacity-50'
+                  : 'hover:bg-gray-700'
+              }`}
+              title='Refresh contacts'
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            <p>Refresh contacts</p>
-          </button>
-        </div>
-
-        {/* Sync Progress - lets disable this sync progress, this logic is a bit uneven */}
-        {/* {syncProgress && (
-          <div className="p-4 bg-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-300">{syncProgress.message}</span>
-              {syncProgress.progress && (
-                <span className="text-sm text-gray-400">{syncProgress.progress}%</span>
-              )}
-            </div>
-            {syncProgress.progress && (
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div 
-                  className="bg-green-500 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${syncProgress.progress}%` }}
+              <svg
+                className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
-              </div>
+              </svg>
+              <p>Refresh contacts</p>
+            </button>
+          </div>
+          
+          {/* Search Input */}
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search contacts..."
+              className="w-full bg-[#1e2132] text-white px-4 py-2 rounded-lg border border-gray-700 focus:outline-none focus:ring-1 focus:ring-[#1e6853] placeholder-gray-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute w-auto right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+              >
+                <svg className="w-auto h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             )}
           </div>
-        )} */}
+        </div>
 
         {/* Contact List */}
         <div className="flex-1 overflow-y-auto">
@@ -584,15 +596,20 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 Retry
               </button>
             </div>
-          ) : !filteredContacts?.length ? (
+          ) : !searchedContacts?.length ? (
             <div className="flex flex-col items-center justify-center p-4">
               <p className="text-gray-500">
-                {syncProgress ? 'Syncing contacts...' : 'Application syncs new contacts with new messages 🔃'}
+                {searchQuery 
+                  ? `No contacts found matching "${searchQuery}"`
+                  : syncProgress 
+                    ? 'Syncing contacts...' 
+                    : 'Application syncs new contacts with new messages 🔃'
+                }
               </p>
             </div>
           ) : (
             <div className="contact-list divide-y divide-gray-700">
-              {filteredContacts.map(contact => (
+              {searchedContacts.map(contact => (
                 <ContactItem
                   key={contact.id}
                   contact={contact}
