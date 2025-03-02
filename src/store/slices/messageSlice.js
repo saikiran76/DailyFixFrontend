@@ -59,6 +59,21 @@ export const fetchNewMessages = createAsyncThunk(
   }
 );
 
+export const refreshMessages = createAsyncThunk(
+  'messages/refresh',
+  async ({ contactId }, { rejectWithValue }) => {
+    try {
+      logger.info('[Messages] Refreshing messages for contact:', contactId);
+      const result = await messageService.refreshMessages(contactId);
+      logger.info('[Messages] Refreshed messages:', result.messages?.length);
+      return { contactId, ...result };
+    } catch (error) {
+      logger.error('[Messages] Failed to refresh messages:', error);
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
 // Slice definition
 const messageSlice = createSlice({
   name: 'messages',
@@ -72,7 +87,9 @@ const messageSlice = createSlice({
     unreadMessageIds: [], // Array instead of Set
     lastKnownMessageIds: {}, // Map of contactId to last message ID
     newMessagesFetching: false,
-    newMessagesError: null
+    newMessagesError: null,
+    refreshing: false,
+    refreshError: null
   },
   reducers: {
     clearMessages: (state) => {
@@ -106,19 +123,35 @@ const messageSlice = createSlice({
         state.items[contactId] = [];
       }
 
-      const exists = state.items[contactId].some(m => 
-        m.id === normalized.id ||
-        m.message_id === normalized.message_id ||
-        m.content_hash === normalized.content_hash
-      );
+      // Check for duplicates based on message_id only
+      const exists = state.items[contactId].some(existingMsg => {
+        // Check if it's the same message by ID (either message_id or id)
+        return (existingMsg.message_id && normalized.message_id && 
+                existingMsg.message_id === normalized.message_id) ||
+               (existingMsg.id && normalized.id && 
+                existingMsg.id === normalized.id);
+      });
 
       if (!exists) {
+        // Add message and maintain chronological order
         state.items[contactId] = [
           ...state.items[contactId],
           normalized
-        ].sort((a, b) => 
-          new Date(a.timestamp) - new Date(b.timestamp)
-        );
+        ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        logger.debug('[Messages] New message added:', {
+          id: normalized.id,
+          message_id: normalized.message_id,
+          content: normalized.content,
+          timestamp: normalized.timestamp
+        });
+      } else {
+        logger.debug('[Messages] Duplicate message detected:', {
+          id: normalized.id,
+          message_id: normalized.message_id,
+          content: normalized.content,
+          timestamp: normalized.timestamp
+        });
       }
     },
     addToMessageQueue: (state, action) => {
@@ -147,19 +180,28 @@ const messageSlice = createSlice({
         const { messages, hasMore } = action.payload;
         const contactId = action.meta.arg.contactId;
         const page = action.meta.arg.page;
-  
-        const normalized = messages.map(messageService.normalizeMessage);
-        const existingIds = new Set((state.items[contactId] || []).map(m => m.id));
-  
+
+        // Normalize all messages
+        const normalized = messages.map(msg => messageService.normalizeMessage(msg));
+
+        // Check for duplicates using message_id only
+        const uniqueMessages = normalized.filter(newMsg => {
+          return !state.items[contactId]?.some(existingMsg => 
+            (existingMsg.message_id && newMsg.message_id && 
+             existingMsg.message_id === newMsg.message_id) ||
+            (existingMsg.id && newMsg.id && 
+             existingMsg.id === newMsg.id)
+          );
+        });
+
         state.items[contactId] = [
           ...(page === 0 ? [] : state.items[contactId] || []),
-          ...normalized.filter(m => !existingIds.has(m.id))
-        ].sort((a, b) => 
-          new Date(a.timestamp) - new Date(b.timestamp)
-        );
-  
+          ...uniqueMessages
+        ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
         state.hasMore = hasMore;
         state.currentPage = page;
+        state.loading = false;
       })
       .addCase(fetchMessages.rejected, (state, action) => {
         state.loading = false;
@@ -196,20 +238,36 @@ const messageSlice = createSlice({
           return;
         }
 
-        const normalized = messages.map(messageService.normalizeMessage);
-        const existingIds = new Set((state.items[contactId] || []).map(m => m.id));
-        
-        // Only add messages that don't exist and update lastKnownMessageId
-        const newMessages = normalized.filter(m => !existingIds.has(m.id));
-        if (newMessages.length > 0) {
+        // Use message_id for unique key generation
+        const getMessageKey = (msg) => msg.message_id || msg.id;
+
+        const existingKeys = new Set(
+          (state.items[contactId] || []).map(getMessageKey)
+        );
+
+        const normalized = messages
+          .map(messageService.normalizeMessage)
+          .filter(msg => !existingKeys.has(getMessageKey(msg)));
+
+        if (normalized.length > 0) {
           state.items[contactId] = [
             ...(state.items[contactId] || []),
-            ...newMessages
-          ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            ...normalized
+          ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
           // Update last known message ID
           const latestMessage = normalized[normalized.length - 1];
           state.lastKnownMessageIds[contactId] = latestMessage.id;
+
+          logger.debug('[Messages] New messages added:', {
+            count: normalized.length,
+            messages: normalized.map(msg => ({
+              id: msg.id,
+              message_id: msg.message_id,
+              content: msg.content,
+              timestamp: msg.timestamp
+            }))
+          });
         }
         
         state.newMessagesFetching = false;
@@ -217,6 +275,37 @@ const messageSlice = createSlice({
       .addCase(fetchNewMessages.rejected, (state, action) => {
         state.newMessagesFetching = false;
         state.newMessagesError = action.payload || 'Failed to fetch new messages';
+      })
+      // Refresh messages
+      .addCase(refreshMessages.pending, (state) => {
+        state.refreshing = true;
+        state.refreshError = null;
+      })
+      .addCase(refreshMessages.fulfilled, (state, action) => {
+        const { contactId, messages } = action.payload;
+        state.refreshing = false;
+        
+        if (!messages || !Array.isArray(messages)) return;
+        
+        // Use existing message normalization
+        const normalized = messages.map(msg => messageService.normalizeMessage(msg))
+          .filter(newMsg => !state.items[contactId]?.some(existingMsg => 
+            (existingMsg.message_id && newMsg.message_id && 
+             existingMsg.message_id === newMsg.message_id) ||
+            (existingMsg.id && newMsg.id && 
+             existingMsg.id === newMsg.id)
+          ));
+
+        if (normalized.length > 0) {
+          state.items[contactId] = [
+            ...(state.items[contactId] || []),
+            ...normalized
+          ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        }
+      })
+      .addCase(refreshMessages.rejected, (state, action) => {
+        state.refreshing = false;
+        state.refreshError = action.payload;
       });
   }
 });
@@ -243,4 +332,6 @@ export const selectMessageQueue = (state) => state.messages.messageQueue;
 export const selectUnreadMessageIds = (state) => state.messages.unreadMessageIds;
 export const selectLastKnownMessageId = (state, contactId) => state.messages.lastKnownMessageIds[contactId];
 export const selectNewMessagesFetching = (state) => state.messages.newMessagesFetching;
-export const selectNewMessagesError = (state) => state.messages.newMessagesError; 
+export const selectNewMessagesError = (state) => state.messages.newMessagesError;
+export const selectRefreshing = (state) => state.messages.refreshing;
+export const selectRefreshError = (state) => state.messages.refreshError; 

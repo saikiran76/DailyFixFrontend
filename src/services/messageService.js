@@ -76,16 +76,45 @@ class MessageService {
     const safeTimestamp = message.timestamp ? new Date(message.timestamp).toISOString() : now;
     const safeReceivedAt = message.received_at ? new Date(message.received_at).toISOString() : now;
 
+    // Normalize content
+    const normalizedContent = this._normalizeContent(message.content);
+    
+    // Create content hash
+    const contentHash = this._createContentHash(normalizedContent);
+
     const baseMessage = {
       ...message,
       id: message.id || message.message_id || uuidv4(),
       message_id: message.message_id || message.id,
       received_at: safeReceivedAt,
       timestamp: safeTimestamp,
-      content_hash: message.content
+      content: normalizedContent,
+      content_hash: contentHash
     };
 
     return baseMessage;
+  }
+
+  _normalizeContent(content) {
+    if (!content) return '';
+    
+    // If content is a string that looks like JSON, try to parse it
+    if (typeof content === 'string' && content.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(content);
+        return parsed.body || parsed.content || content;
+      } catch {
+        return content;
+      }
+    }
+    
+    // If content is an object with body property
+    if (typeof content === 'object' && content.body) {
+      return content.body;
+    }
+    
+    // Otherwise return the content as is
+    return content;
   }
 
   async sendMessage(contactId, message) {
@@ -114,6 +143,24 @@ class MessageService {
       return true;
     } catch (error) {
       logger.error('[MessageService] Error marking messages as read:', error);
+      throw error;
+    }
+  }
+
+  async refreshMessages(contactId) {
+    try {
+      const response = await api.get(`/api/whatsapp-entities/contacts/${contactId}/refreshMessages`);
+
+      if (!response.data || typeof response.data !== 'object') {
+        throw new Error('Invalid response format');
+      }
+
+      return {
+        messages: response.data.data || [],
+        metadata: response.data.metadata || { count: 0, timestamp: new Date().toISOString() }
+      };
+    } catch (error) {
+      logger.error('[MessageService] Error refreshing messages:', error);
       throw error;
     }
   }
